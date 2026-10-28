@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend import conexion_mt5
+from backend.core import conexion_mt5
 
 
 class CopiarVelasTests(unittest.TestCase):
