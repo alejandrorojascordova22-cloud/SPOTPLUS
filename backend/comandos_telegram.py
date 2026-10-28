@@ -7,8 +7,8 @@ backend/servidor.py (no por HTTP, llamada directa a las funciones de MT5).
 Teclado fijo (siempre visible, debajo del cuadro de texto):
     [📊 Ver posiciones]     [🛡 Mover TODAS a BE]
     [📒 Bitácora]           [⏸ Pausar/Reanudar bot]
-    [💰 Balance]            [🎚 Riesgo]
-    [📤 Exportar historial] [🏦 Cuentas]
+    [💰 Balance]            [🏦 Cuentas]
+    [📤 Exportar historial] [📈 Estadísticas]
 
 "📊 Ver posiciones" manda UN SOLO mensaje con la lista de operaciones
 abiertas como botones (uno por ticket). Al tocar un ticket, ESE MISMO
@@ -28,9 +28,6 @@ el historial (con confirmación para evitar borrados accidentales).
 
 "💰 Balance" muestra balance, equity, margen libre y si la cuenta es
 real o demo, en vivo.
-
-"🎚 Riesgo" deja elegir, con botones, el % del balance a arriesgar por
-operación (modo porcentaje) entre valores predefinidos.
 
 "📤 Exportar historial" genera un CSV con las operaciones cerradas de
 los últimos N días (todas las cuentas/símbolos) y lo manda como archivo
@@ -74,9 +71,8 @@ def _teclado_principal():
         "keyboard": [
             [{"text": "📊 Ver posiciones"}, {"text": "🛡 Mover TODAS a BE"}],
             [{"text": "📒 Bitácora"}, {"text": "⏸ Pausar/Reanudar bot"}],
-            [{"text": "💰 Balance"}, {"text": "🎚 Riesgo"}],
-            [{"text": "📤 Exportar historial"}, {"text": "🏦 Cuentas"}],
-            [{"text": "📈 Estadísticas"}, {"text": "🧮 Calculadora"}],
+            [{"text": "💰 Balance"}, {"text": "🏦 Cuentas"}],
+            [{"text": "📤 Exportar historial"}, {"text": "📈 Estadísticas"}],
         ],
         "resize_keyboard": True,
         "is_persistent": True,
@@ -220,24 +216,6 @@ def escuchar_comandos_operaciones(config_bot, responder, obtener_posiciones_abie
                     _menu_estadisticas(token, chat_id_autorizado)
                     continue
 
-                if texto == "🧮 Calculadora":
-                    _tg(token, "sendMessage", {
-                        "chat_id": chat_id_autorizado, "parse_mode": "HTML",
-                        "text": (
-                            "<b>🧮 Calculadora</b>\n"
-                            "Manda: <code>/calc entrada sl tp riesgo%</code>\n"
-                            "Ej: <code>/calc 4200 4190 4230 1</code>\n"
-                            "tp y riesgo% son opcionales (si no pones riesgo% usa el de tu config). "
-                            "Para ver un cierre parcial agrega % y distancia: "
-                            "<code>/calc 4200 4190 4230 1 50 15</code>"
-                        ),
-                    })
-                    continue
-
-                if texto.lower().startswith("/calc"):
-                    _calcular_en_telegram(token, chat_id_autorizado, texto, config_bot, obtener_info_cuenta)
-                    continue
-
                 if texto == "🛡 Mover TODAS a BE":
                     _mover_todas_a_be(token, chat_id_autorizado, obtener_posiciones_abiertas, modificar_sl)
                     continue
@@ -252,10 +230,6 @@ def escuchar_comandos_operaciones(config_bot, responder, obtener_posiciones_abie
 
                 if texto == "💰 Balance":
                     _mostrar_balance(token, chat_id_autorizado, obtener_info_cuenta)
-                    continue
-
-                if texto == "🎚 Riesgo":
-                    _menu_riesgo(token, chat_id_autorizado, config_bot)
                     continue
 
                 if texto == "📤 Exportar historial":
@@ -420,35 +394,6 @@ def _mostrar_balance(token, chat_id, obtener_info_cuenta):
 
 
 # ============================================================
-# 🎚 RIESGO
-# ============================================================
-_PRESETS_RIESGO = [0.5, 1.0, 1.5, 2.0, 3.0]
-
-
-def _menu_riesgo(token, chat_id, config_bot):
-    modo = config_bot.get("modo_riesgo")
-    valor = config_bot.get("riesgo_valor")
-    actual = f"Modo actual: {modo} · Valor: {valor}" if modo else "Modo actual: no configurado"
-    filas = [[{"text": f"{p}%", "callback_data": f"riesgo:{p}"} for p in _PRESETS_RIESGO[:3]],
-             [{"text": f"{p}%", "callback_data": f"riesgo:{p}"} for p in _PRESETS_RIESGO[3:]]]
-    _tg(token, "sendMessage", {
-        "chat_id": chat_id,
-        "text": f"<b>🎚 Riesgo por operación</b>\n{actual}\n\nElige el % del balance a arriesgar por operación:",
-        "parse_mode": "HTML",
-        "reply_markup": {"inline_keyboard": filas},
-    })
-
-
-def _aplicar_riesgo(token, chat_id, config_bot, valor):
-    config_bot["modo_riesgo"] = "porcentaje"
-    config_bot["riesgo_valor"] = valor
-    _tg(token, "sendMessage", {
-        "chat_id": chat_id,
-        "text": f"✅ Riesgo actualizado: {valor}% del balance por operación (modo porcentaje).",
-    })
-
-
-# ============================================================
 # 📤 EXPORTAR HISTORIAL
 # ============================================================
 _PRESETS_DIAS = [7, 30, 90, 365]
@@ -588,11 +533,6 @@ def _manejar_boton(callback, token, chat_id, pendiente_por_chat, config_bot,
 
     if data == "bitborrar_no":
         _tg(token, "sendMessage", {"chat_id": chat_id, "text": "Cancelado, no se borró nada."})
-        return
-
-    if data.startswith("riesgo:"):
-        valor = float(data.split(":", 1)[1])
-        _aplicar_riesgo(token, chat_id, config_bot, valor)
         return
 
     if data.startswith("exp:"):
@@ -807,54 +747,3 @@ def _mostrar_estadisticas(token, chat_id, obtener_historial_cerradas, obtener_in
         f"Rachas máx.: {e['racha_max_ganadora']} ganadoras / {e['racha_max_perdedora']} perdedoras"
     )
     _tg(token, "sendMessage", {"chat_id": chat_id, "text": texto, "parse_mode": "HTML"})
-
-
-def _calcular_en_telegram(token, chat_id, texto, config_bot, obtener_info_cuenta):
-    from .riesgo import calculo_completo
-    partes = texto.replace(",", ".").split()[1:]
-    try:
-        nums = [float(x.rstrip("%")) for x in partes]
-    except ValueError:
-        nums = []
-    if len(nums) < 2:
-        _tg(token, "sendMessage", {"chat_id": chat_id, "parse_mode": "HTML",
-                                   "text": "Formato: <code>/calc entrada sl [tp] [riesgo%] [parcial% distancia]</code>"})
-        return
-    entrada, sl = nums[0], nums[1]
-    tp = nums[2] if len(nums) > 2 else 0.0
-    info = obtener_info_cuenta() if obtener_info_cuenta else None
-    if not info:
-        _tg(token, "sendMessage", {"chat_id": chat_id, "text": "No pude leer el balance (¿MT5 conectado?)."})
-        return
-    if len(nums) > 3 and nums[3] > 0:
-        modo, valor = "porcentaje", nums[3]
-    elif config_bot.get("modo_riesgo") == "monto_fijo":
-        modo, valor = "fijo", float(config_bot.get("riesgo_valor") or 0) or 1.0
-    else:
-        modo, valor = "porcentaje", float(config_bot.get("riesgo_valor") or 0) or 1.0
-    parcial_pct = nums[4] if len(nums) > 5 else None
-    parcial_dist = nums[5] if len(nums) > 5 else None
-    r = calculo_completo(info["balance"], entrada, sl, tp, config_bot.get("simbolo"), modo, valor, parcial_pct, parcial_dist)
-    if r is None:
-        _tg(token, "sendMessage", {"chat_id": chat_id, "text": "Faltan datos para calcular (revisa entrada y SL)."})
-        return
-    m = info["moneda"]
-    riesgo_txt = f"{valor}%" if modo == "porcentaje" else f"{valor:,.2f} {m}"
-    lineas = [
-        f"<b>🧮 {config_bot.get('simbolo')}</b> · riesgo {riesgo_txt} · balance {info['balance']:,.2f} {m}",
-        f"Lotaje sugerido: <b>{r['lotaje']}</b>",
-        f"Pérdida estimada: {r.get('perdida_estimada', r['dinero_riesgo']):,.2f} {m} ({r.get('riesgo_real_pct', '--')}%)",
-    ]
-    if tp:
-        lineas.append(f"Ganancia estimada: {r.get('ganancia_estimada', 0):,.2f} {m} · R:R 1:{r.get('ratio_rr', 0)}")
-    if r.get("oportunidades"):
-        lineas.append(f"Oportunidades con este riesgo: {r['oportunidades']}")
-    if r.get("parcial"):
-        p = r["parcial"]
-        lineas.append(
-            f"Parcial: cierras {p['lote_parcial']} lotes → +{p['ganancia_parcial']:,.2f} {m}; "
-            f"quedan {p['lote_restante']} (riesgo {p['perdida_restante']:,.2f}, si TP +{p['ganancia_restante_si_tp']:,.2f})"
-        )
-    if r.get("advertencia"):
-        lineas.append(f"⚠ {r['advertencia']}")
-    _tg(token, "sendMessage", {"chat_id": chat_id, "text": "\n".join(lineas), "parse_mode": "HTML"})

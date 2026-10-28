@@ -659,17 +659,3 @@ def obtener_tamano_contrato(simbolo=SIMBOLO):
     if info is None or not getattr(info, "trade_contract_size", None):
         return 100.0  # valor típico de respaldo (ej. onzas por lote en oro)
     return float(info.trade_contract_size)
-
-
-@_con_candado
-def obtener_limites_volumen(simbolo=SIMBOLO):
-    """Mínimo, máximo y paso de volumen que permite el broker para este símbolo.
-    Se usa para no mandar un lotaje calculado que MT5 vaya a rechazar."""
-    info = mt5.symbol_info(simbolo)
-    if info is None:
-        return {"minimo": 0.01, "maximo": 100.0, "paso": 0.01}
-    return {
-        "minimo": float(getattr(info, "volume_min", 0.01) or 0.01),
-        "maximo": float(getattr(info, "volume_max", 100.0) or 100.0),
-        "paso": float(getattr(info, "volume_step", 0.01) or 0.01),
-    }

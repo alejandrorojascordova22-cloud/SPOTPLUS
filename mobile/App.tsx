@@ -40,15 +40,6 @@ function serializeGruposTexto(obj: Record<string, string>): string {
 // api() revienta con un error legible en vez de dejar pasar datos con forma incorrecta.
 const ParamSchema = z.object({ nombre: z.string(), etiqueta: z.string(), tipo: z.string(), default: z.union([z.string(), z.number()]) });
 const BlockSchema = z.object({ nombre: z.string(), explicacion: z.string(), parametros: z.array(ParamSchema) });
-const EstadoZonaSchema = z.object({
-  estado: z.enum(['sin_zona', 'esperando_confirmacion', 'confirmada']),
-  tipo: z.string().optional(),
-  bloque: z.string().optional(),
-  zona_precio: z.number().optional(),
-  precio_entrada: z.number().optional(),
-  sl: z.number().optional(),
-  tp: z.number().optional(),
-}).nullable();
 const ContextoTemporalidadSchema = z.object({
   grupo: z.string(),
   sesgo: z.enum(['alcista', 'bajista']).nullable(),
@@ -85,11 +76,10 @@ const StateSchema = z.object({
   simbolo_actual: z.string().nullable().optional(),
   error: z.string().nullable(),
   sesgo_macro: z.enum(['alcista', 'bajista']).nullable().optional(),
-  estado_zona: EstadoZonaSchema.optional(),
   contexto_estructura: ContextoEstructuraSchema,
   ultima_orden: UltimaOrdenSchema,
   circuito_disparado: z.boolean().optional(),
-  config: z.object({ simbolo: z.string(), simbolos_permitidos: z.array(z.string()).optional(), activo: z.boolean(), estrategia: z.string().nullable().optional(), estrategia_biblioteca_activa: z.string().nullable().optional(), timeframe_entrada: z.string().optional(), timeframe_macro: z.string().optional(), modo_riesgo: z.string().optional(), riesgo_valor: z.number().optional(), volumen_operacion: z.number().optional(), circuito_perdida_diaria_activo: z.boolean().optional(), circuito_perdida_diaria_pct: z.number().optional(), spread_maximo_puntos: z.number().optional(), max_operaciones_por_simbolo: z.number().optional(), filtro_sesgo_macro: z.boolean().optional(), aviso_cambio_direccion: z.boolean().optional(), proteger_cambio_direccion: z.boolean().optional(), noticia_be_activo: z.boolean().optional(), bloqueo_noticias_activo: z.boolean().optional(), riesgo_total_activo: z.boolean().optional(), riesgo_total_pct: z.number().optional(), be_activo: z.boolean().optional(), be_porcentaje: z.number().optional(), be_cascada_buffer_pct: z.number().optional(), be_dinamico_activo: z.boolean().optional(), be_dinamico_fibo_nivel: z.number().optional(), grupos_temporalidad: z.record(z.string(), z.string()).optional(), temporalidades_escaneo: z.array(z.string()).optional(), parametros: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())])).optional() }).optional(),
+  config: z.object({ simbolo: z.string(), simbolos_permitidos: z.array(z.string()).optional(), activo: z.boolean(), estrategia: z.string().nullable().optional(), estrategia_biblioteca_activa: z.string().nullable().optional(), timeframe_entrada: z.string().optional(), timeframe_macro: z.string().optional(), volumen_operacion: z.number().optional(), circuito_perdida_diaria_activo: z.boolean().optional(), circuito_perdida_diaria_pct: z.number().optional(), spread_maximo_puntos: z.number().optional(), max_operaciones_por_simbolo: z.number().optional(), filtro_sesgo_macro: z.boolean().optional(), aviso_cambio_direccion: z.boolean().optional(), proteger_cambio_direccion: z.boolean().optional(), noticia_be_activo: z.boolean().optional(), bloqueo_noticias_activo: z.boolean().optional(), be_activo: z.boolean().optional(), be_porcentaje: z.number().optional(), be_cascada_buffer_pct: z.number().optional(), be_dinamico_activo: z.boolean().optional(), be_dinamico_fibo_nivel: z.number().optional(), grupos_temporalidad: z.record(z.string(), z.string()).optional(), temporalidades_escaneo: z.array(z.string()).optional(), parametros: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())])).optional() }).optional(),
 });
 const AccountSchema = z.object({ cuenta: z.number(), servidor: z.string(), balance: z.number(), equity: z.number(), profit: z.number(), apalancamiento: z.number(), moneda: z.string(), es_real: z.boolean() });
 const AccountResponseSchema = z.union([AccountSchema, z.object({ error: z.string() })]);
@@ -104,11 +94,7 @@ function formatearHora12(epochSegundos?: number | null): string {
   const horaTxt = fecha.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
   return `${fechaTxt} ${horaTxt}`;
 }
-const SavedSchema = z.object({ nombre: z.string(), explicacion: z.string(), codigo: z.string(), volumen: z.number(), sl: z.number(), tp: z.number(), modo_riesgo: z.string().optional(), riesgo_valor: z.number().optional(), usa_multi_temporalidad: z.boolean().optional(), timeframe_entrada: z.string().optional(), timeframe_macro: z.string().optional(), temporalidades_escaneo: z.array(z.string()).optional(), roles_temporalidad: z.record(z.string(), z.string()).optional(), zonas_permitidas: z.array(z.string()).optional(), es_estructura_dinamica: z.boolean().optional(), parametros: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())])).optional() });
-const CalculoRiesgoSchema = z.union([
-  z.object({ lotaje: z.number(), dinero_riesgo: z.number(), distancia_sl: z.number(), advertencia: z.string().nullable(), perdida_estimada: z.number().optional(), ganancia_estimada: z.number().optional(), ratio_rr: z.number().optional(), riesgo_real_pct: z.number().nullable().optional(), oportunidades: z.number().optional() }),
-  z.object({ error: z.string() }),
-]);
+const SavedSchema = z.object({ nombre: z.string(), explicacion: z.string(), codigo: z.string(), volumen: z.number(), sl: z.number(), tp: z.number(), usa_multi_temporalidad: z.boolean().optional(), timeframe_entrada: z.string().optional(), timeframe_macro: z.string().optional(), temporalidades_escaneo: z.array(z.string()).optional(), roles_temporalidad: z.record(z.string(), z.string()).optional(), zonas_permitidas: z.array(z.string()).optional(), parametros: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())])).optional() });
 const TelegramConfigSchema = z.object({ activo: z.boolean(), bot_token: z.string(), chat_id: z.string(), aviso_apertura: z.boolean(), aviso_cierre: z.boolean(), aviso_sl_tp: z.boolean(), aviso_parcial: z.boolean(), aviso_zona: z.boolean() });
 const TelegramProbarSchema = z.object({ ok: z.boolean(), error: z.string().optional() });
 const HistoryItemSchema = z.object({ ticket: z.number(), simbolo: z.string(), tipo: z.string(), volumen: z.number(), profit: z.number(), hora: z.number() });
@@ -1485,16 +1471,6 @@ function TimeframeSelector({ label, value, onChange }: { label: string; value: s
 export default function App() {
   const [state, setState] = useState<State | null>(null); const [account, setAccount] = useState<Account | null>(null); const [positions, setPositions] = useState<Position[]>([]); const [history, setHistory] = useState<HistoryItem[]>([]); const [message, setMessage] = useState(''); const [loading, setLoading] = useState(true); const [refreshing, setRefreshing] = useState(false);
   const [symbol, setSymbol] = useState(''); const [simbolosPermitidos, setSimbolosPermitidos] = useState(''); const [volume, setVolume] = useState('0.01'); const [sl, setSl] = useState(''); const [tp, setTp] = useState(''); const [orderType, setOrderType] = useState<'mercado' | 'limite'>('mercado'); const [entryPrice, setEntryPrice] = useState(''); const [blocks, setBlocks] = useState<Record<string, Block>>({}); const [keys, setKeys] = useState<string[]>([]); const [buy, setBuy] = useState<Condition[]>([]); const [sell, setSell] = useState<Condition[]>([]); const [buyOp, setBuyOp] = useState<'and' | 'or'>('and'); const [sellOp, setSellOp] = useState<'and' | 'or'>('and'); const [sendingOrder, setSendingOrder] = useState(false); const [perdidaDiariaPct, setPerdidaDiariaPct] = useState('5'); const [spreadMaximo, setSpreadMaximo] = useState('0');
-  // --- Parámetros de "estructura_dinamica" (SpotPlus) — antes fijos en el código, ahora editables ---
-  const [pPivotLen, setPPivotLen] = useState('5');
-  const [pPivotLenMacro, setPPivotLenMacro] = useState('15');
-  const [pPorcentajeTp, setPPorcentajeTp] = useState('0.8');
-  const [pSlBufferPct, setPSlBufferPct] = useState('0.1');
-  const [pMinimoRatioTp, setPMinimoRatioTp] = useState('0');
-  const [pMaxVelasDesdeZona, setPMaxVelasDesdeZona] = useState('0');
-  const [pRupturaCuerpoAtr, setPRupturaCuerpoAtr] = useState('1');
-  const [pRupturaCierreAtr, setPRupturaCierreAtr] = useState('0.1');
-  const [pExtensionesLiquidez, setPExtensionesLiquidez] = useState('1.1,1.27,1.38');
   const [saved, setSaved] = useState<Saved[]>([]); const [name, setName] = useState(''); const [explanation, setExplanation] = useState(''); const [code, setCode] = useState(''); const [savedVolume, setSavedVolume] = useState(''); const [savedSl, setSavedSl] = useState(''); const [savedTp, setSavedTp] = useState('');
   const [savedUsaMultiTf, setSavedUsaMultiTf] = useState(false); const [savedTfEntrada, setSavedTfEntrada] = useState(''); const [savedTfMacro, setSavedTfMacro] = useState('');
   // Temporalidades del ESCANEO multi-timeframe (est.escanear_multitemporalidad):
@@ -1522,42 +1498,19 @@ export default function App() {
   const [zonasPermitidas, setZonasPermitidas] = useState<string[]>([]);
   // El formulario de estrategia está oculto hasta pulsar "Agregar estrategia nueva" (o Editar).
   const [formAbierto, setFormAbierto] = useState(false);
-  // --- Gestión de riesgo de la estrategia guardada ---
-  // 'lotaje_fijo': usa savedVolume tal cual. 'porcentaje'/'monto_fijo': el bot calcula
-  // el lotaje solo en cada operación según savedRiesgoValor y la distancia del SL.
-  const [savedModoRiesgo, setSavedModoRiesgo] = useState<'lotaje_fijo' | 'porcentaje' | 'monto_fijo'>('lotaje_fijo');
-  const [savedRiesgoValor, setSavedRiesgoValor] = useState('');
-  const [lotajeSugerido, setLotajeSugerido] = useState<{ lotaje: number; dinero_riesgo: number; advertencia: string | null } | null>(null);
-  const [savedEntryPreview, setSavedEntryPreview] = useState('');
   const [posicionSeleccionada, setPosicionSeleccionada] = useState<Position | null>(null);
   const [btFrom, setBtFrom] = useState('2026-01-01'); const [btTo, setBtTo] = useState('2026-06-01'); const [btBalance, setBtBalance] = useState('10000'); const [btTfEntrada, setBtTfEntrada] = useState('M15'); const [btTfMacro, setBtTfMacro] = useState('H1'); const [btRunning, setBtRunning] = useState(false); const [btResult, setBtResult] = useState<BacktestResult | null>(null); const [btProgress, setBtProgress] = useState(0); const [btShowReplay, setBtShowReplay] = useState(false);
-  const [tab, setTab] = useState<'mercado' | 'estrategia' | 'operar' | 'calculadora' | 'historial' | 'fundamentales' | 'telegram'>('mercado');
-  const [calcEntrada, setCalcEntrada] = useState(''); const [calcSl, setCalcSl] = useState(''); const [calcTp, setCalcTp] = useState('');
-  const [calcModo, setCalcModo] = useState<'porcentaje' | 'fijo'>('porcentaje'); const [calcValor, setCalcValor] = useState('1');
+  const [tab, setTab] = useState<'mercado' | 'estrategia' | 'operar' | 'historial' | 'fundamentales' | 'telegram'>('mercado');
   const [maxOperaciones, setMaxOperaciones] = useState('1');
-  const [riesgoTotalPct, setRiesgoTotalPct] = useState('1');
   const [beCascadaBufferPct, setBeCascadaBufferPct] = useState('20');
   const [beDinamicoFiboNivel, setBeDinamicoFiboNivel] = useState('0.5');
   const [gruposTemporalidadTexto, setGruposTemporalidadTexto] = useState('');
   // Escaneo por temporalidades: Automático (grupos y roles por defecto) o Manual (tú eliges).
   const [escaneoManual, setEscaneoManual] = useState(false);
-  const [calcResultado, setCalcResultado] = useState<{ lotaje: number; dinero_riesgo: number; distancia_sl: number; advertencia: string | null; perdida_estimada?: number; ganancia_estimada?: number; ratio_rr?: number; riesgo_real_pct?: number | null; oportunidades?: number } | null>(null);
   const [estadisticas, setEstadisticas] = useState<z.infer<typeof EstadisticasSchema> | null>(null);
   const [bitacora, setBitacora] = useState<z.infer<typeof NotaBitacoraSchema>[]>([]);
   const [notaNueva, setNotaNueva] = useState('');
   const [diario, setDiario] = useState<z.infer<typeof DiarioSchema>[]>([]); const [diarioStats, setDiarioStats] = useState<z.infer<typeof DiarioStatsSchema> | null>(null);
-  function usarCalculoEnOperar() {
-    if (!calcResultado || 'error' in calcResultado) return;
-    setVolume(String(calcResultado.lotaje)); setSl(calcSl); setTp(calcTp);
-    if (calcEntrada) setEntryPrice(calcEntrada);
-    setTab('operar'); setMessage(`Lote ${calcResultado.lotaje} cargado desde la calculadora. Revisa y confirma la orden.`);
-  }
-  async function calcularRiesgoManual() {
-    const entrada = Number(calcEntrada); const sl = Number(calcSl);
-    if (!entrada || !sl) { setMessage('Pon precio de entrada y SL para calcular'); return; }
-    const result = await api('/api/calcular_riesgo', CalculoRiesgoSchema, post({ precio_entrada: entrada, sl, tp: Number(calcTp) || undefined, modo_riesgo: calcModo, riesgo_valor: Number(calcValor) || 1 }));
-    if ('error' in result) { setMessage(result.error); setCalcResultado(null); } else { setCalcResultado(result); }
-  }
   async function cargarEstadisticasYBitacora() {
     try { setEstadisticas(await api('/api/estadisticas?dias=30', EstadisticasSchema, {})); } catch { }
     try { setBitacora(await api('/api/bitacora', z.array(NotaBitacoraSchema), {})); } catch { }
@@ -1591,21 +1544,10 @@ export default function App() {
   function formatearHoraEvento(iso: string): string {
     try { return new Date(iso).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true, day: '2-digit', month: 'short' }); } catch { return iso; }
   }
-  const load = useCallback(async () => { try { const [s, a, p, h, catalog, list, tg] = await Promise.all([api('/api/estado', StateSchema), api('/api/cuenta', AccountResponseSchema), api('/api/posiciones', z.array(PositionSchema)), api('/api/historial?dias=7', z.array(HistoryItemSchema)), api('/api/bloques_disponibles', BloquesDisponiblesSchema), api('/api/estrategias_guardadas', z.array(SavedSchema)), api('/api/telegram', TelegramConfigSchema)]); setState(s); setAccount('error' in a ? null : a); setPositions(p); setHistory(h); setBlocks(catalog.bloques); setKeys(Object.keys(catalog.bloques)); setSaved(list); setSymbol(s.config?.simbolo || ''); setPerdidaDiariaPct(String(s.config?.circuito_perdida_diaria_pct ?? 5)); setSpreadMaximo(String(s.config?.spread_maximo_puntos ?? 0)); setMaxOperaciones(String(s.config?.max_operaciones_por_simbolo ?? 1)); setRiesgoTotalPct(String(s.config?.riesgo_total_pct ?? 1));
+  const load = useCallback(async () => { try { const [s, a, p, h, catalog, list, tg] = await Promise.all([api('/api/estado', StateSchema), api('/api/cuenta', AccountResponseSchema), api('/api/posiciones', z.array(PositionSchema)), api('/api/historial?dias=7', z.array(HistoryItemSchema)), api('/api/bloques_disponibles', BloquesDisponiblesSchema), api('/api/estrategias_guardadas', z.array(SavedSchema)), api('/api/telegram', TelegramConfigSchema)]); setState(s); setAccount('error' in a ? null : a); setPositions(p); setHistory(h); setBlocks(catalog.bloques); setKeys(Object.keys(catalog.bloques)); setSaved(list); setSymbol(s.config?.simbolo || ''); setPerdidaDiariaPct(String(s.config?.circuito_perdida_diaria_pct ?? 5)); setSpreadMaximo(String(s.config?.spread_maximo_puntos ?? 0)); setMaxOperaciones(String(s.config?.max_operaciones_por_simbolo ?? 1));
       setBeCascadaBufferPct(String(s.config?.be_cascada_buffer_pct ?? 20));
       setBeDinamicoFiboNivel(String(s.config?.be_dinamico_fibo_nivel ?? 0.5));
       setGruposTemporalidadTexto(Object.entries(s.config?.grupos_temporalidad || {}).map(([tf, grupo]) => `${tf}:${grupo}`).join(', '));
-      const pEst = s.config?.parametros || {};
-      setPPivotLen(String(pEst.pivot_len ?? 5));
-      setPPivotLenMacro(String(pEst.pivot_len_macro ?? 15));
-      setPPorcentajeTp(String(pEst.porcentaje_tp ?? 0.8));
-      setPSlBufferPct(String(pEst.sl_buffer_pct ?? 0.1));
-      setPMinimoRatioTp(String(pEst.minimo_ratio_tp ?? 0));
-      setPMaxVelasDesdeZona(String(pEst.max_velas_desde_zona ?? 0));
-      setPRupturaCuerpoAtr(String(pEst.ruptura_cuerpo_atr ?? 1));
-      setPRupturaCierreAtr(String(pEst.ruptura_cierre_atr ?? 0.1));
-      const extensionesLiquidez = pEst.extensiones_liquidez;
-      setPExtensionesLiquidez(String((Array.isArray(extensionesLiquidez) ? extensionesLiquidez : [1.1, 1.27, 1.38]).join(',')));
       setTgActivo(tg.activo); setTgToken(tg.bot_token); setTgChatId(tg.chat_id); setTgAvisoApertura(tg.aviso_apertura); setTgAvisoCierre(tg.aviso_cierre); setTgAvisoSlTp(tg.aviso_sl_tp); setTgAvisoParcial(tg.aviso_parcial); setTgAvisoZona(tg.aviso_zona); setMessage(''); } catch (error) { setMessage(error instanceof Error ? error.message : 'No se pudo conectar al backend'); } finally { setLoading(false); setRefreshing(false); } }, []);
   useEffect(() => { load(); cargarFundamentales(); const timer = setInterval(() => { load(); cargarFundamentales(); }, 10000); return () => clearInterval(timer); }, [load]);
   // Precio en vivo: el backend refresca el tick cada 1 s, así que el panel consulta solo
@@ -1706,13 +1648,11 @@ export default function App() {
   // para que una estrategia nueva NUNCA herede valores de la anterior.
   function resetFormularioEstrategia() {
     setName(''); setExplanation(''); setCode(''); setEditando(null);
-    setSavedSl(''); setSavedTp(''); setSavedVolume(''); setSavedRiesgoValor(''); setSavedEntryPreview('');
-    setSavedModoRiesgo('lotaje_fijo');
+    setSavedSl(''); setSavedTp(''); setSavedVolume('');
     setSavedUsaMultiTf(false); setSavedTfEntrada(''); setSavedTfMacro('');
     setSavedTemporalidadesEscaneo('');
     setRolesTemporalidad({ micro: '', intermedia: '', macro: '', extra_macro: '' });
     setZonasPermitidas([]);
-    setLotajeSugerido(null);
     setFormAbierto(false);
   }
   // Formulario vacío y visible (para empezar una estrategia nueva).
@@ -1729,24 +1669,20 @@ export default function App() {
           { text: 'Cancelar', style: 'cancel' },
           { text: 'Actualizar', onPress: () => {
               setEditando(nombre);
-              run('/api/estrategias_guardadas', { nombre, explicacion: explanation, codigo: code, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0, modo_riesgo: savedModoRiesgo, riesgo_valor: Number(savedRiesgoValor) || 1.0, usa_multi_temporalidad: savedUsaMultiTf, timeframe_entrada: savedTfEntrada, timeframe_macro: savedTfMacro, temporalidades_escaneo: savedTemporalidadesEscaneo.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean), roles_temporalidad: rolesElegidos(), zonas_permitidas: zonasPermitidas }, 'Estrategia actualizada');
+              run('/api/estrategias_guardadas', { nombre, explicacion: explanation, codigo: code, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0, usa_multi_temporalidad: savedUsaMultiTf, timeframe_entrada: savedTfEntrada, timeframe_macro: savedTfMacro, temporalidades_escaneo: savedTemporalidadesEscaneo.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean), roles_temporalidad: rolesElegidos(), zonas_permitidas: zonasPermitidas }, 'Estrategia actualizada');
               resetFormularioEstrategia();
             } },
         ],
       );
       return;
     }
-    run('/api/estrategias_guardadas', { nombre, explicacion: explanation, codigo: code, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0, modo_riesgo: savedModoRiesgo, riesgo_valor: Number(savedRiesgoValor) || 1.0, usa_multi_temporalidad: savedUsaMultiTf, timeframe_entrada: savedTfEntrada, timeframe_macro: savedTfMacro, temporalidades_escaneo: savedTemporalidadesEscaneo.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean), roles_temporalidad: rolesElegidos(), zonas_permitidas: zonasPermitidas }, 'Estrategia guardada');
+    run('/api/estrategias_guardadas', { nombre, explicacion: explanation, codigo: code, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0, usa_multi_temporalidad: savedUsaMultiTf, timeframe_entrada: savedTfEntrada, timeframe_macro: savedTfMacro, temporalidades_escaneo: savedTemporalidadesEscaneo.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean), roles_temporalidad: rolesElegidos(), zonas_permitidas: zonasPermitidas }, 'Estrategia guardada');
     resetFormularioEstrategia();
   }
   async function guardarEstrategiaActual() {
-    const nombre = name.trim() || `${state?.config?.estrategia === 'estructura_dinamica' ? 'SpotPlus' : 'Estrategia'} actual`;
+    const nombre = name.trim() || 'Estrategia actual';
     const explicacion = explanation.trim() || `Snapshot de la estrategia activa en el backend (${state?.config?.estrategia || 'manual'}).`;
-    const codigo = code.trim() || (
-      state?.config?.estrategia === 'estructura_dinamica'
-        ? `# Snapshot de SpotPlus\n# entrada=${state.config.timeframe_entrada || 'M15'}\n# macro=${state.config.timeframe_macro || 'H1'}\n# riesgo=${state.config.modo_riesgo || 'lotaje_fijo'}\n`
-        : '# Estrategia guardada desde el backend\n'
-    );
+    const codigo = code.trim() || '# Estrategia guardada desde el backend\n';
     try {
       const yaExiste = saved.some((item) => item.nombre.toLowerCase() === nombre.toLowerCase());
       if (yaExiste && !editando) {
@@ -1756,7 +1692,7 @@ export default function App() {
           [
             { text: 'Cancelar', style: 'cancel' },
             { text: 'Sobrescribir', onPress: async () => {
-                const result = await api('/api/estrategias_guardadas/desde_actual', RunResultSchema, post({ nombre, explicacion, codigo, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0, modo_riesgo: savedModoRiesgo, riesgo_valor: Number(savedRiesgoValor) || 1.0 }));
+                const result = await api('/api/estrategias_guardadas/desde_actual', RunResultSchema, post({ nombre, explicacion, codigo, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0 }));
                 setMessage(result.error || 'Estrategia activa actualizada en la biblioteca');
                 await load();
                 resetFormularioEstrategia();
@@ -1765,7 +1701,7 @@ export default function App() {
         );
         return;
       }
-      const result = await api('/api/estrategias_guardadas/desde_actual', RunResultSchema, post({ nombre, explicacion, codigo, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0, modo_riesgo: savedModoRiesgo, riesgo_valor: Number(savedRiesgoValor) || 1.0 }));
+      const result = await api('/api/estrategias_guardadas/desde_actual', RunResultSchema, post({ nombre, explicacion, codigo, volumen: Number(savedVolume) || 0.01, sl: Number(savedSl) || 0, tp: Number(savedTp) || 0 }));
       setMessage(result.error || 'Estrategia activa guardada en la biblioteca');
       await load();
       resetFormularioEstrategia();
@@ -1793,27 +1729,11 @@ export default function App() {
       extra_macro: (rolesGuardados.extra_macro as any) || '',
     });
     setZonasPermitidas((item.zonas_permitidas || []).filter((z) => ZONAS_ESPERA.some((e) => e.id === z)));
-    const modo = (item.modo_riesgo === 'porcentaje' || item.modo_riesgo === 'monto_fijo') ? item.modo_riesgo : 'lotaje_fijo';
-    setSavedModoRiesgo(modo);
-    if (modo === 'lotaje_fijo') { setSavedVolume(String(item.volumen)); } else { setSavedRiesgoValor(String(item.riesgo_valor ?? 1.0)); }
+    setSavedVolume(String(item.volumen));
     setEditando(item.nombre);
     setFormAbierto(true);
     setMessage(`Editando "${item.nombre}" — sus datos se cargaron en el formulario de arriba.`);
   }
-  useEffect(() => {
-    if (savedModoRiesgo === 'lotaje_fijo') { setLotajeSugerido(null); return; }
-    const entrada = Number(savedEntryPreview) || (state?.precio?.bid ?? 0);
-    const sl = Number(savedSl);
-    const valor = Number(savedRiesgoValor);
-    if (!entrada || !sl || !valor) { setLotajeSugerido(null); return; }
-    const timer = setTimeout(async () => {
-      try {
-        const result = await api('/api/calcular_riesgo', CalculoRiesgoSchema, post({ precio_entrada: entrada, sl, modo_riesgo: savedModoRiesgo, riesgo_valor: valor }));
-        setLotajeSugerido('error' in result ? null : result);
-      } catch { setLotajeSugerido(null); }
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [savedModoRiesgo, savedRiesgoValor, savedSl, savedEntryPreview, state?.precio?.bid]);
   function order(type: 'compra' | 'venta') {
     const amount = Number(volume);
     if (!amount || amount <= 0) { Alert.alert('Volumen inválido', 'Debe ser mayor que cero.'); return; }
@@ -1878,7 +1798,7 @@ export default function App() {
       : <Text style={styles.error}>Última orden del bot RECHAZADA por MT5: {state.ultima_orden.error || 'sin detalle'}</Text>
   ) : null}
   <View style={styles.tabBar}>
-    {([['mercado', 'Mercado'], ['estrategia', 'Estrategia'], ['operar', 'Operar'], ['calculadora', 'Calculadora'], ['historial', 'Historial'], ['fundamentales', 'Fundamentales'], ['telegram', 'Telegram']] as const).map(([key, label]) => (
+    {([['mercado', 'Mercado'], ['estrategia', 'Estrategia'], ['operar', 'Operar'], ['historial', 'Historial'], ['fundamentales', 'Fundamentales'], ['telegram', 'Telegram']] as const).map(([key, label]) => (
       <Pressable key={key} onPress={() => setTab(key)} style={[styles.tabButton, tab === key && styles.tabButtonActive]}>
         <Text style={[styles.tabButtonText, tab === key && styles.tabButtonTextActive]}>{label}</Text>
       </Pressable>
@@ -1888,7 +1808,7 @@ export default function App() {
   <Section title="Mercado">
   {(() => {
     const activo = state?.config?.activo ?? true;
-    const nombreEstrategia = state?.config?.estrategia_biblioteca_activa || (state?.config?.estrategia === 'estructura_dinamica' ? 'SpotPlus (estructura dinámica)' : state?.config?.estrategia);
+    const nombreEstrategia = state?.config?.estrategia_biblioteca_activa || state?.config?.estrategia;
     const simboloActivo = state?.simbolo_actual || state?.config?.simbolo || '--';
     if (activo && nombreEstrategia) {
       return <View style={[styles.connection, styles.online, { alignSelf: 'flex-start', marginBottom: 14 }]}><View style={styles.dot} /><Text style={styles.connectionText}>Operando "{nombreEstrategia}" en {simboloActivo}</Text></View>;
@@ -1981,14 +1901,6 @@ export default function App() {
     </View>
     <Field label="MÁX. OPERACIONES ABIERTAS POR SÍMBOLO (0 = ilimitadas)" value={maxOperaciones} onChangeText={setMaxOperaciones} numeric />
     <Text style={styles.explanation}>Por defecto es 1: evita que una misma señal abra varias operaciones seguidas. La temporalidad de entrada y la macro de la estrategia activa se mantienen aunque MT5 muestre otro gráfico.</Text>
-    <Text style={[styles.label, { marginTop: 10 }]}>RIESGO TOTAL (se reparte entre activos)</Text>
-    <Text style={styles.explanation}>Activado: el riesgo total (ej. 1% del balance) se divide entre los activos que analiza el bot y sus operaciones máximas abiertas, así nunca te pasas del total aunque agregues más activos. Manda sobre el riesgo de cada estrategia.</Text>
-    <View style={styles.rowButtons}>
-      <Button label={state?.config?.riesgo_total_activo ? 'Riesgo total: ACTIVADO' : 'Riesgo total: desactivado'} onPress={() => run('/api/config', { riesgo_total_activo: !state?.config?.riesgo_total_activo }, 'Riesgo total actualizado')} color={state?.config?.riesgo_total_activo ? '#237a4b' : '#303b48'} />
-    </View>
-    <Field label="RIESGO TOTAL (% del balance)" value={riesgoTotalPct} onChangeText={setRiesgoTotalPct} numeric />
-    <Text style={styles.muted}>Ahora: {state?.config?.simbolos_permitidos?.length || 1} activo(s) × {state?.config?.max_operaciones_por_simbolo || 2} operaciones = {((Number(riesgoTotalPct) || 1) / ((state?.config?.simbolos_permitidos?.length || 1) * (state?.config?.max_operaciones_por_simbolo || 2))).toFixed(3)}% por operación.</Text>
-    <Button label="Guardar riesgo total" onPress={() => run('/api/config', { riesgo_total_pct: Number(riesgoTotalPct) || 1 }, 'Riesgo total guardado')} color="#b88b35" />
     <Button label="Guardar límites" onPress={() => run('/api/config', { circuito_perdida_diaria_pct: Number(perdidaDiariaPct) || 0, spread_maximo_puntos: Number(spreadMaximo) || 0, max_operaciones_por_simbolo: Math.max(0, Math.floor(Number(maxOperaciones) || 0)) }, 'Límites guardados')} color="#b88b35" />
   </Section>
   <Section title="Estrategias guardadas">
@@ -2133,23 +2045,7 @@ export default function App() {
     {ZONAS_ESPERA.map((z) => <Text key={z.id} style={styles.muted}>{z.nombre}: {z.ayuda}</Text>)}
     <Field label="CÓDIGO PYTHON" value={code} onChangeText={setCode} multiline code />
     <View style={styles.rowButtons}><Field label="STOP LOSS (puntos de precio)" value={savedSl} onChangeText={setSavedSl} numeric /><Field label="TAKE PROFIT" value={savedTp} onChangeText={setSavedTp} numeric /></View>
-    <Text style={[styles.label, { marginTop: 4 }]}>GESTIÓN DE RIESGO</Text>
-    <View style={styles.rowButtons}>
-      <Button label="Lotaje fijo" onPress={() => setSavedModoRiesgo('lotaje_fijo')} color={savedModoRiesgo === 'lotaje_fijo' ? '#b88b35' : '#303b48'} />
-      <Button label="% del balance" onPress={() => setSavedModoRiesgo('porcentaje')} color={savedModoRiesgo === 'porcentaje' ? '#b88b35' : '#303b48'} />
-      <Button label="Monto fijo" onPress={() => setSavedModoRiesgo('monto_fijo')} color={savedModoRiesgo === 'monto_fijo' ? '#b88b35' : '#303b48'} />
-    </View>
-    {savedModoRiesgo === 'lotaje_fijo'
-      ? <Field label="VOLUMEN (lotes)" value={savedVolume} onChangeText={setSavedVolume} numeric placeholder="0.01" />
-      : <>
-          <View style={styles.rowButtons}>
-            <Field label={savedModoRiesgo === 'porcentaje' ? '% DEL BALANCE A ARRIESGAR' : 'DINERO A ARRIESGAR'} value={savedRiesgoValor} onChangeText={setSavedRiesgoValor} numeric />
-            <Field label="PRECIO DE ENTRADA (para previsualizar)" value={savedEntryPreview} onChangeText={setSavedEntryPreview} numeric />
-          </View>
-          <Text style={styles.explanation}>El lotaje NO se fija a mano: el bot lo calcula solo en cada operación según {savedModoRiesgo === 'porcentaje' ? 'el % del balance' : 'el monto'} configurado y la distancia real del SL. A menor distancia de SL, mayor lotaje; a mayor distancia, menor lotaje.</Text>
-          {lotajeSugerido ? <View style={styles.saved}><Text style={styles.savedTitle}>Lotaje sugerido: {lotajeSugerido.lotaje}</Text><Text style={styles.explanation}>Arriesgarías ~{lotajeSugerido.dinero_riesgo} en esta operación.</Text>{lotajeSugerido.advertencia ? <Text style={styles.error}>{lotajeSugerido.advertencia}</Text> : null}</View> : <Text style={styles.muted}>Completa precio de entrada, SL y el % o monto para ver el lotaje sugerido.</Text>}
-        </>
-    }
+    <Field label="VOLUMEN (lotes fijos)" value={savedVolume} onChangeText={setSavedVolume} numeric placeholder="0.01" />
     {editando ? <Text style={[styles.explanation, { color: '#e4b75a' }]}>Editando "{editando}" — al guardar se sobrescribe (mismo nombre).</Text> : null}
     <Button label={editando ? 'Guardar cambios' : 'Guardar estrategia'} onPress={saveLibrary} color="#2563eb" />
     <Button label="Cancelar / cerrar formulario" onPress={resetFormularioEstrategia} color="#303b48" />
@@ -2160,41 +2056,9 @@ export default function App() {
     {saved.length ? <Button label="Borrar TODAS las estrategias" onPress={() => { if (typeof window !== 'undefined' && window.confirm('Esto borra TODAS las estrategias guardadas, incluidas las del backend. ¿Seguro?')) { run('/api/estrategias_guardadas', {}, 'Todas las estrategias borradas', 'DELETE'); } }} color="#8a2c2c" /> : null}
     {saved.map((item) => {
       const estaActiva = state?.config?.estrategia_biblioteca_activa === item.nombre;
-      return <View style={styles.saved} key={item.nombre}><Text style={styles.savedTitle}>{item.nombre}</Text><Text style={styles.explanation}>{item.explicacion || 'Sin descripción'}</Text><Text style={styles.codeSummary}>Riesgo: {item.modo_riesgo === 'porcentaje' ? `${item.riesgo_valor}% del balance` : item.modo_riesgo === 'monto_fijo' ? `${item.riesgo_valor} fijo por operación` : `${item.volumen} lotes fijos`} · SL {item.sl} · TP {item.tp}</Text><Text style={styles.codeSummary}>Entrada: {item.timeframe_entrada || 'M15'} · Macro: {item.timeframe_macro || 'H1'} · Usa macro: {item.usa_multi_temporalidad ? 'sí' : 'no'}</Text><View style={styles.rowButtons}><Button label={estaActiva ? 'Desactivar' : 'Activar'} onPress={() => estaActiva ? run('/api/estrategia/reset_total', {}, `${item.nombre} desactivada`) : run(`/api/estrategias_guardadas/activar/${encodeURIComponent(item.nombre)}`, {}, `${item.nombre} activada`)} color={estaActiva ? '#8a2c2c' : '#237a4b'} /><Button label="Ver código" onPress={() => exportarGuardada(item)} color="#2563eb" /><Button label="Editar" onPress={() => editarGuardada(item)} color="#b88b35" /><Button label="Borrar" onPress={() => run(`/api/estrategias_guardadas/${encodeURIComponent(item.nombre)}`, {}, `${item.nombre} borrada`, 'DELETE')} /></View></View>;
+      return <View style={styles.saved} key={item.nombre}><Text style={styles.savedTitle}>{item.nombre}</Text><Text style={styles.explanation}>{item.explicacion || 'Sin descripción'}</Text><Text style={styles.codeSummary}>Volumen: {item.volumen} lotes · SL {item.sl} · TP {item.tp}</Text><Text style={styles.codeSummary}>Entrada: {item.timeframe_entrada || 'M15'} · Macro: {item.timeframe_macro || 'H1'} · Usa macro: {item.usa_multi_temporalidad ? 'sí' : 'no'}</Text><View style={styles.rowButtons}><Button label={estaActiva ? 'Desactivar' : 'Activar'} onPress={() => estaActiva ? run('/api/estrategia/reset_total', {}, `${item.nombre} desactivada`) : run(`/api/estrategias_guardadas/activar/${encodeURIComponent(item.nombre)}`, {}, `${item.nombre} activada`)} color={estaActiva ? '#8a2c2c' : '#237a4b'} /><Button label="Ver código" onPress={() => exportarGuardada(item)} color="#2563eb" /><Button label="Editar" onPress={() => editarGuardada(item)} color="#b88b35" /><Button label="Borrar" onPress={() => run(`/api/estrategias_guardadas/${encodeURIComponent(item.nombre)}`, {}, `${item.nombre} borrada`, 'DELETE')} /></View></View>;
     })}
     {state?.config?.estrategia_biblioteca_activa ? <Text style={[styles.foot, { marginTop: 8 }]}>Activa: {state.config.estrategia_biblioteca_activa}</Text> : null}
-  </Section>
-  <Section title="Parámetros de la estrategia SpotPlus (estructura dinámica)">
-    <Text style={styles.explanation}>Aplica al motor de estructura y a la estrategia SpotPlus multitemporalidad. La ruptura fuerte se mide en ATR; la ruptura débil se clasifica como OBC. Los marcos micro confirman y la entrada se espera en el retroceso a la zona.</Text>
-    <View style={styles.rowButtons}>
-      <Field label="PIVOT LEN (entrada)" value={pPivotLen} onChangeText={setPPivotLen} numeric />
-      <Field label="PIVOT LEN MACRO" value={pPivotLenMacro} onChangeText={setPPivotLenMacro} numeric />
-    </View>
-    <View style={styles.rowButtons}>
-      <Field label="% DEL MOVIMIENTO MACRO PARA EL TP" value={pPorcentajeTp} onChangeText={setPPorcentajeTp} numeric />
-      <Field label="COLCHÓN DE SL (% sobre la zona)" value={pSlBufferPct} onChangeText={setPSlBufferPct} numeric />
-    </View>
-    <View style={styles.rowButtons}>
-      <Field label="RATIO TP MÍNIMO (0 = sin filtro)" value={pMinimoRatioTp} onChangeText={setPMinimoRatioTp} numeric />
-      <Field label="MÁX. VELAS DESDE LA ZONA (0 = sin límite)" value={pMaxVelasDesdeZona} onChangeText={setPMaxVelasDesdeZona} numeric />
-      <Field label="EXTENSIONES DE LIQUIDEZ 110%, 127%, 138%" value={pExtensionesLiquidez} onChangeText={setPExtensionesLiquidez} />
-    </View>
-    <View style={styles.rowButtons}>
-      <Field label="CUERPO MÍNIMO DE RUPTURA FUERTE (ATR)" value={pRupturaCuerpoAtr} onChangeText={setPRupturaCuerpoAtr} numeric />
-      <Field label="CIERRE MÍNIMO MÁS ALLÁ DEL NIVEL (ATR)" value={pRupturaCierreAtr} onChangeText={setPRupturaCierreAtr} numeric />
-    </View>
-    <Text style={styles.explanation}>El ratio TP mínimo es el que descarta señales cuyo TP calculado valga menos de X veces el riesgo (ej. 1.5 = solo entra si el TP potencial es al menos 1.5R). En 0, no filtra nada — deja pasar cualquier señal, aunque el TP valga muy poco frente al riesgo.</Text>
-    <Button label="Guardar parámetros" onPress={() => run('/api/config', { parametros: {
-      ...(state?.config?.parametros || {}),
-      pivot_len: Number(pPivotLen) || 5,
-      pivot_len_macro: Number(pPivotLenMacro) || 15,
-      porcentaje_tp: Number(pPorcentajeTp) || 0.8,
-      sl_buffer_pct: Number(pSlBufferPct) || 0.1,
-      minimo_ratio_tp: Number(pMinimoRatioTp) || 0,
-      max_velas_desde_zona: Number(pMaxVelasDesdeZona) || 0,
-      ruptura_cuerpo_atr: Number(pRupturaCuerpoAtr) || 1,
-      ruptura_cierre_atr: Number(pRupturaCierreAtr) || 0.1,
-    } }, 'Parámetros de la estrategia guardados')} color="#b88b35" />
   </Section>
   <Section title="Backtesting"><Text style={styles.explanation}>Simula, vela por vela y sin mirar al futuro, cómo se habría comportado la estrategia ACTIVA del bot en un rango de fechas pasado, usando velas reales de MT5.</Text><View style={styles.rowButtons}><DateField label="DESDE" value={btFrom} onChangeText={setBtFrom} /><DateField label="HASTA" value={btTo} onChangeText={setBtTo} /></View><View style={styles.rowButtons}><TimeframeSelector label="MICRO / ENTRADA" value={btTfEntrada} onChange={setBtTfEntrada} /><TimeframeSelector label="MACRO" value={btTfMacro} onChange={setBtTfMacro} /></View><Text style={styles.explanation}>Micro define las velas donde se buscan entradas; Macro se usa para el movimiento de fondo y el TP. Solo afecta este backtest.</Text><Field label="BALANCE INICIAL" value={btBalance} onChangeText={setBtBalance} numeric /><Button label={btRunning ? `Simulando... ${btProgress.toFixed(0)}%` : 'Correr backtest'} onPress={runBacktest} color="#2563eb" />
   {btRunning ? <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${btProgress}%` }]} /></View> : null}
@@ -2234,26 +2098,7 @@ export default function App() {
   {tab === 'operar' && <>
   <Section title="Operar manualmente"><Text style={styles.label}>TIPO DE ORDEN</Text><View style={styles.rowButtons}><Button label="Mercado" onPress={() => setOrderType('mercado')} color={orderType === 'mercado' ? '#b88b35' : '#303b48'} /><Button label="Límite" onPress={() => setOrderType('limite')} color={orderType === 'limite' ? '#b88b35' : '#303b48'} /></View>{orderType === 'limite' ? <Field label="PRECIO DE ENTRADA" value={entryPrice} onChangeText={setEntryPrice} numeric /> : null}<View style={styles.rowButtons}><Field label="VOLUMEN" value={volume} onChangeText={setVolume} numeric /><Field label="STOP LOSS" value={sl} onChangeText={setSl} numeric /></View><Field label="TAKE PROFIT" value={tp} onChangeText={setTp} numeric /><View style={styles.rowButtons}><Button label={sendingOrder ? 'Enviando...' : 'Comprar'} onPress={() => order('compra')} color="#237a4b" /><Button label={sendingOrder ? 'Enviando...' : 'Vender'} onPress={() => order('venta')} color="#a84343" /></View><Text style={styles.orderHint}>La orden requiere confirmación y se envía a MetaTrader 5.</Text></Section>
   <Section title={`Posiciones abiertas (${positions.length})`}>{positions.length ? positions.map((item) => <Pressable style={styles.position} key={item.ticket} onPress={() => setPosicionSeleccionada(item)}><View style={styles.positionHeader}><Text style={[styles.badge, item.tipo === 'compra' ? styles.buyBadge : styles.sellBadge]}>{item.tipo.toUpperCase()}</Text><Text style={styles.positionName}>{item.simbolo} · {item.volumen} lotes</Text><Pressable onPress={() => run(`/api/cerrar/${item.ticket}`, {}, 'Posición cerrada')}><Text style={styles.close}>Cerrar</Text></Pressable></View><Text style={styles.muted}>Apertura {item.precio_apertura} · Actual {item.precio_actual} · P/L real: {item.profit} {account?.moneda || ''}</Text><Text style={styles.foot}>Toca para ver el motivo y contexto</Text></Pressable>) : <Text style={styles.muted}>Sin posiciones abiertas. Si el bot dice "CONFIRMADA — YA EJECUTADA" y aquí no aparece nada, revisa el mensaje de "Última orden del bot" arriba — seguro MT5 la rechazó (volumen mínimo, stops muy cerca, símbolo no visible, etc).</Text>}</Section>
-  {posicionSeleccionada ? <Modal visible transparent animationType="slide" onRequestClose={() => setPosicionSeleccionada(null)}><Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'center', padding: 20 }} onPress={() => setPosicionSeleccionada(null)}><Pressable style={{ backgroundColor: '#151b23', borderWidth: 1, borderColor: '#33404d', borderRadius: 8, padding: 18, maxWidth: 600, width: '100%', alignSelf: 'center' }} onPress={(event) => event.stopPropagation()}><Text style={styles.savedTitle}>Detalle de operación · {posicionSeleccionada.ticket}</Text><Text style={styles.explanation}>MT5 informa que esta operación está abierta. Entrada: {posicionSeleccionada.tipo.toUpperCase()} a {posicionSeleccionada.precio_apertura} · Precio actual: {posicionSeleccionada.precio_actual} · P/L: {posicionSeleccionada.profit} {account?.moneda || ''}</Text><Text style={styles.muted}>Abierta: {formatearHora12(posicionSeleccionada.hora_apertura)}</Text><Text style={styles.label}>CONTEXTO DE LA ESTRATEGIA</Text><Text style={styles.explanation}>Micro / entrada: {state?.config?.timeframe_entrada || 'no disponible'} · Macro: {state?.config?.timeframe_macro || 'no disponible'}</Text>{state?.estado_zona?.estado === 'esperando_confirmacion' ? <Text style={{ color: '#e4b75a', backgroundColor: '#3c3020', borderRadius: 6, padding: 10, marginVertical: 10 }}>Ahora hay una zona de espera tocada ({state.estado_zona.tipo || 'sin tipo'}), pero todavía falta confirmación BOS.</Text> : state?.estado_zona?.estado === 'confirmada' ? <Text style={styles.message}>Ahora hay una estructura confirmada: {state.estado_zona.tipo || 'señal'}.</Text> : <Text style={styles.muted}>Ahora no hay una zona de espera activa. El estado actual no sustituye al historial de la entrada.</Text>}{state?.ultima_orden && !state.ultima_orden.ok ? <Text style={styles.error}>Último intento rechazado por MT5: {state.ultima_orden.error || 'sin detalle'}</Text> : null}<Button label="Cerrar detalle" onPress={() => setPosicionSeleccionada(null)} color="#8a2c2c" /></Pressable></Pressable></Modal> : null}
-  </>}
-  {tab === 'calculadora' && <>
-  <Section title="Calculadora de riesgo">
-    <Text style={styles.explanation}>Calcula el lotaje según tu balance real, sin necesidad de guardar ninguna estrategia. Usa el mismo motor que el bot para operar.</Text>
-    <View style={styles.rowButtons}><Field label="PRECIO DE ENTRADA" value={calcEntrada} onChangeText={setCalcEntrada} numeric /><Field label="STOP LOSS" value={calcSl} onChangeText={setCalcSl} numeric /></View>
-    <Field label="TAKE PROFIT (opcional, para ver ganancia estimada)" value={calcTp} onChangeText={setCalcTp} numeric />
-    <View style={styles.rowButtons}><Button label="% del balance" onPress={() => setCalcModo('porcentaje')} color={calcModo === 'porcentaje' ? '#b88b35' : '#303b48'} /><Button label="Monto fijo" onPress={() => setCalcModo('fijo')} color={calcModo === 'fijo' ? '#b88b35' : '#303b48'} /></View>
-    <Field label={calcModo === 'porcentaje' ? '% A ARRIESGAR' : 'MONTO FIJO A ARRIESGAR'} value={calcValor} onChangeText={setCalcValor} numeric />
-    <Button label="Calcular" onPress={calcularRiesgoManual} color="#237a4b" />
-    {calcResultado ? <View style={[styles.saved, { marginTop: 12 }]}>
-      <Text style={styles.savedTitle}>Lotaje sugerido: {calcResultado.lotaje}</Text>
-      <Text style={styles.explanation}>Arriesgas ~{calcResultado.dinero_riesgo} {account?.moneda || ''} · distancia al SL: {calcResultado.distancia_sl}</Text>
-      {calcResultado.perdida_estimada !== undefined ? <Text style={styles.explanation}>Pérdida estimada: {calcResultado.perdida_estimada} {account?.moneda || ''}{calcResultado.riesgo_real_pct != null ? ` (${calcResultado.riesgo_real_pct}% del balance)` : ''}</Text> : null}
-      {calcResultado.ganancia_estimada ? <Text style={styles.explanation}>Ganancia estimada al TP: {calcResultado.ganancia_estimada} {account?.moneda || ''} · R:R 1:{calcResultado.ratio_rr}</Text> : null}
-      {calcResultado.oportunidades ? <Text style={styles.muted}>Oportunidades con este riesgo: {calcResultado.oportunidades}</Text> : null}
-      {calcResultado.advertencia ? <Text style={styles.error}>{calcResultado.advertencia}</Text> : null}
-      <Button label="Usar este lote en Operar" onPress={usarCalculoEnOperar} color="#2563eb" />
-    </View> : null}
-  </Section>
+  {posicionSeleccionada ? <Modal visible transparent animationType="slide" onRequestClose={() => setPosicionSeleccionada(null)}><Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'center', padding: 20 }} onPress={() => setPosicionSeleccionada(null)}><Pressable style={{ backgroundColor: '#151b23', borderWidth: 1, borderColor: '#33404d', borderRadius: 8, padding: 18, maxWidth: 600, width: '100%', alignSelf: 'center' }} onPress={(event) => event.stopPropagation()}><Text style={styles.savedTitle}>Detalle de operación · {posicionSeleccionada.ticket}</Text><Text style={styles.explanation}>MT5 informa que esta operación está abierta. Entrada: {posicionSeleccionada.tipo.toUpperCase()} a {posicionSeleccionada.precio_apertura} · Precio actual: {posicionSeleccionada.precio_actual} · P/L: {posicionSeleccionada.profit} {account?.moneda || ''}</Text><Text style={styles.muted}>Abierta: {formatearHora12(posicionSeleccionada.hora_apertura)}</Text><Text style={styles.label}>CONTEXTO DE LA ESTRATEGIA</Text><Text style={styles.explanation}>Micro / entrada: {state?.config?.timeframe_entrada || 'no disponible'} · Macro: {state?.config?.timeframe_macro || 'no disponible'}</Text>{state?.ultima_orden && !state.ultima_orden.ok ? <Text style={styles.error}>Último intento rechazado por MT5: {state.ultima_orden.error || 'sin detalle'}</Text> : null}<Button label="Cerrar detalle" onPress={() => setPosicionSeleccionada(null)} color="#8a2c2c" /></Pressable></Pressable></Modal> : null}
   </>}
   {tab === 'historial' && <>
   <Section title="Estadísticas (últimos 30 días)">{estadisticas ? <>

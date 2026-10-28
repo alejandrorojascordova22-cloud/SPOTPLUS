@@ -1717,7 +1717,7 @@ def escanear_todas_las_oportunidades(
     temporalidad que confirmó (ej. el 5m: la "tomas" rápido, un TP corto).
     Ambas comparten "id" base pero terminan en "_runner" y "_corta"
     respectivamente, y llevan "escala": "runner"/"corta" para que
-    servidor.py/riesgo.py las repartan como dos posiciones independientes.
+    servidor.py las gestione como dos posiciones independientes.
     Si el grupo se autoconfirmó (no había temporalidad "confirmar"
     disponible), no hay de dónde sacar la escala corta y no se duplica.
     porcentaje_tp_confirmador: el % del tramo de la confirmadora usado
@@ -2084,25 +2084,3 @@ def be_dinamico(
             return True, "perdida_alineacion"
 
     return False, None
-
-
-def dividir_riesgo_entre_operaciones(oportunidades, riesgo_total_valor):
-    """
-    Reparte 'riesgo_total_valor' (ej. 1% del balance, o $60 fijos) en
-    PARTES IGUALES entre todas las oportunidades encontradas por
-    escanear_todas_las_oportunidades(). Le agrega a cada dict el campo
-    "riesgo_valor" con la parte que le toca — listo para pasarlo a
-    riesgo.calcular_lotaje(..., valor=oportunidad["riesgo_valor"]).
-
-    Ejemplo del usuario: riesgo total 1% del balance, se encuentran 2
-    oportunidades (una en 5m, otra en 2h) -> cada una recibe 0.5%.
-    Si solo hubiera 1 oportunidad, esa recibe el 1% completo. Si no hay
-    ninguna, regresa la lista vacía tal cual (nada que operar).
-    """
-    n = len(oportunidades)
-    if n == 0:
-        return oportunidades
-    parte = riesgo_total_valor / n
-    for op in oportunidades:
-        op["riesgo_valor"] = parte
-    return oportunidades

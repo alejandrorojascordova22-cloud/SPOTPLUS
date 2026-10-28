@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-python-dotenv
-MetaTrader5
-pandas
-pandas-ta
-requests

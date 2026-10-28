@@ -6,7 +6,7 @@ Telegram" para no llenar el proyecto de archivos sueltos:
 
   1) Registro de cuentas (hasta 3, guardadas en backend/cuentas.json)
   2) Lanzador: levanta un proceso backend por cada cuenta activa
-  3) Escuchador de Telegram: recibe tus mensajes y cambia SL/TP/riesgo/on-off
+  3) Escuchador de Telegram: recibe tus mensajes y cambia SL/TP/volumen/on-off
 
 Por que procesos separados por cuenta (y no "un bot con 3 logins"):
 La libreria MetaTrader5 de Python solo puede tener una sesion iniciada por
@@ -36,10 +36,9 @@ Arrancar TODO (un proceso por cada cuenta activa + el escuchador de Telegram):
 
 Comandos que le mandas por TELEGRAM al bot (no en esta terminal):
     /cuentas                 -> lista cuentas y si estan operando o pausadas
-    /estado demo1            -> SL, TP, riesgo y volumen actuales
+    /estado demo1            -> SL, TP y volumen actuales
     /sl demo1 2350.5         -> cambia el Stop Loss (precio)
     /tp demo1 2410           -> cambia el Take Profit (precio)
-    /riesgo demo1 1.5        -> cambia el % de riesgo por operacion
     /lotaje demo1 0.02       -> cambia el volumen fijo (modo lotaje_fijo)
     /on demo1  /  /off demo1 -> activa / pausa el trading automatico
     /ayuda                   -> lista de comandos
@@ -226,7 +225,6 @@ def _texto_ayuda():
         "/estado &lt;id&gt; \u2014 estado de una cuenta\n"
         "/sl &lt;id&gt; &lt;valor&gt; \u2014 cambia el Stop Loss (precio)\n"
         "/tp &lt;id&gt; &lt;valor&gt; \u2014 cambia el Take Profit (precio)\n"
-        "/riesgo &lt;id&gt; &lt;valor&gt; \u2014 cambia el % de riesgo\n"
         "/lotaje &lt;id&gt; &lt;valor&gt; \u2014 cambia el volumen fijo\n"
         "/on &lt;id&gt; \u2014 activa el trading automatico\n"
         "/off &lt;id&gt; \u2014 lo desactiva\n"
@@ -279,15 +277,14 @@ def _manejar_comando(texto, token, chat_id):
             _responder(
                 token, chat_id,
                 f"<b>{id_cuenta}</b>\nActivo: {cfg.get('activo')}\nSL: {cfg.get('sl_operacion')}\n"
-                f"TP: {cfg.get('tp_operacion')}\nModo riesgo: {cfg.get('modo_riesgo')}\n"
-                f"Riesgo: {cfg.get('riesgo_valor')}\nVolumen: {cfg.get('volumen_operacion')}",
+                f"TP: {cfg.get('tp_operacion')}\nVolumen: {cfg.get('volumen_operacion')}",
             )
             return
 
-        if cmd in ("/sl", "/tp", "/riesgo", "/lotaje") and len(partes) >= 3:
+        if cmd in ("/sl", "/tp", "/lotaje") and len(partes) >= 3:
             valor = float(partes[2])
             campo = {"/sl": "sl_operacion", "/tp": "tp_operacion",
-                     "/riesgo": "riesgo_valor", "/lotaje": "volumen_operacion"}[cmd]
+                     "/lotaje": "volumen_operacion"}[cmd]
             r = requests.post(f"{base_url}/api/config", json={campo: valor}, timeout=5)
             if r.ok:
                 _responder(token, chat_id, f"{campo} de '{id_cuenta}' actualizado a {valor}")

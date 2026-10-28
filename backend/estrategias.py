@@ -181,49 +181,6 @@ BLOQUES = {
 }
 
 
-def evaluar_estructura_dinamica(df, params, df_macro=None):
-    """
-    A diferencia de los bloques de arriba (que solo devuelven True/False),
-    esta función devuelve la señal COMPLETA de est.señal_estructura():
-    tipo, precio de entrada, SL (detrás de la zona) y TP (% del
-    movimiento macro). Es la que usan backtesting.py y servidor.py cuando
-    la estrategia activa es "estructura_dinamica", para poder abrir cada
-    operación con su propio SL/TP calculado en vez de los valores fijos
-    del formulario de riesgo.
-
-    df_macro (opcional): velas reales de la temporalidad PRINCIPAL (ej. H1)
-    para el movimiento macro, separadas de 'df' (temporalidad de entrada,
-    ej. M15). Si no se pasa, cae en la aproximación de un solo timeframe.
-
-    Devuelve el dict de señal_estructura(), o None si no hay señal.
-
-    params["modo_liquidez"] (opcional, string): "evitar" | "esperar_barrida" |
-    "confluencia" | None/"desactivado". Ver señal_estructura() /
-    filtrar_por_liquidez() en estructura.py para el detalle de cada modo.
-    """
-    return est.señal_estructura(
-        df,
-        pivot_len=int(params.get("pivot_len", 5)),
-        pivot_len_macro=int(params.get("pivot_len_macro", 15)),
-        porcentaje_tp=float(params.get("porcentaje_tp", 0.8)),
-        sl_buffer_pct=float(params.get("sl_buffer_pct", 0.1)),
-        max_velas_desde_zona=(
-            int(params["max_velas_desde_zona"])
-            if float(params.get("max_velas_desde_zona", 0)) > 0
-            else None
-        ),
-        df_macro=df_macro,
-        minimo_ratio_tp=(
-            float(params["minimo_ratio_tp"])
-            if float(params.get("minimo_ratio_tp", 0)) > 0
-            else None
-        ),
-        extensiones_liquidez=params.get("extensiones_liquidez"),
-        modo_liquidez=params.get("modo_liquidez"),
-        tolerancia_pct_liquidez=float(params.get("tolerancia_pct_liquidez", 0.15)),
-    )
-
-
 def _num_o_columna(valor):
     """Si 'valor' se puede convertir a número, lo usa como número fijo;
     si no, lo trata como nombre de columna (ej. 'sma_50')."""
@@ -474,9 +431,8 @@ def evaluar_codigo_libre(
 
     resultado = contexto.get("senal")
 
-    # Caso "varias operaciones a la vez" (ej. est.escanear_todas_las_oportunidades
-    # + est.dividir_riesgo_entre_operaciones): el código deja una lista de dicts
-    # en la variable 'operaciones', cada uno con tipo/sl/tp/riesgo_valor propios.
+    # Caso "varias operaciones a la vez": el código deja una lista de dicts
+    # en la variable 'operaciones', cada uno con tipo/sl/tp propios.
     operaciones = contexto.get("operaciones")
     if isinstance(operaciones, list) and operaciones:
         validas = []
@@ -489,7 +445,6 @@ def evaluar_codigo_libre(
                 "sl": float(op.get("sl") or 0.0),
                 "tp": float(op.get("tp") or 0.0),
                 "precio_entrada": float(op.get("precio_entrada") or ultima["close"]),
-                "riesgo_valor": op.get("riesgo_valor"),  # None = usa el modo de riesgo global de la estrategia
                 "volumen": op.get("volumen"),
                 "temporalidad_principal": op.get("temporalidad_principal"),
                 "grupo_principal": op.get("grupo_principal"),
@@ -535,32 +490,7 @@ def evaluar_codigo_libre(
 # visual no puede armar (ej. contar velas, cruces), la escribes aquí
 # igual que antes y la agregas a ESTRATEGIAS.
 
-ESTRATEGIAS = {
-    "estructura_dinamica": {
-        "nombre": "Estructura de mercado (SpotPlus) - COMPLETA con SL/TP propios",
-        "explicacion": (
-            "La versión completa: exige BOS confirmado (rompimiento del pico/valle "
-            "anterior a la zona de espera) antes de dar la señal, coloca el SL justo "
-            "detrás de la zona (HL/LH), y proyecta el TP como un % del movimiento "
-            "MACRO más reciente (no del pullback de entrada). Ignora los campos de "
-            "SL/TP en puntos del formulario de riesgo: cada operación usa su propio "
-            "SL/TP calculado."
-        ),
-        "parametros": {
-            "pivot_len": 5,            # sensibilidad de los pivotes de ENTRADA
-            "pivot_len_macro": 15,     # sensibilidad de los pivotes del movimiento MACRO
-            "porcentaje_tp": 0.8,      # % de la distancia macro que se proyecta como TP
-            "sl_buffer_pct": 0.1,      # % de colchón entre el SL y la zona HL/LH
-            "max_velas_desde_zona": 0, # 0 = sin límite; si no, invalida zonas muy viejas
-        },
-        # No se usa directamente (servidor.py y backtesting.py llaman a
-        # evaluar_estructura_dinamica antes de llegar aquí), pero se deja
-        # por si algo llama a evaluar_estrategia() genérico con este nombre.
-        "funcion": lambda df, p: (
-            (resultado := evaluar_estructura_dinamica(df, p)) is not None and resultado["tipo"] or None
-        ),
-    },
-}
+ESTRATEGIAS = {}
 
 
 def evaluar_estrategia(df, nombre_estrategia, params):

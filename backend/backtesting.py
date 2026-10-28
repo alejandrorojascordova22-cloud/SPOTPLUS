@@ -23,7 +23,6 @@ from .estrategias import (
     evaluar_estrategia_texto,
     evaluar_estrategia_bloques,
     evaluar_codigo_libre,
-    evaluar_estructura_dinamica,
 )
 from .tiempo import timestamps_epoch_segundos
 import numpy as np
@@ -61,18 +60,10 @@ def _calcular_senal(ventana, config, ventana_macro=None, velas_tf=None):
     """Misma prioridad que ciclo_bot en servidor.py: código libre > bloques
     visuales > texto libre > estrategia registrada en ESTRATEGIAS.
 
-    Caso especial: si config['estrategia'] == 'estructura_dinamica', esto
-    devuelve el DICT completo de la señal (tipo, sl, tp propios) en vez de
-    solo "compra"/"venta"/None — simular_backtest lo detecta y usa ese
-    sl/tp por operación en lugar de los puntos fijos del formulario.
-
     ventana_macro (opcional): recorte causal (solo hasta "ahora") del
     segundo CSV de temporalidad macro real, si se pasó uno a
-    simular_backtest. Si es None, estructura_dinamica cae en la
-    aproximación de un solo timeframe.
+    simular_backtest.
     """
-    if config.get("estrategia") == "estructura_dinamica":
-        return evaluar_estructura_dinamica(ventana, config.get("parametros", {}), df_macro=ventana_macro)
     if config.get("codigo_estrategia"):
         timeframe_entrada = str(config.get("timeframe_entrada", "M15")).upper()
         timeframe_macro = str(config.get("timeframe_macro", "H1")).upper()
@@ -117,13 +108,9 @@ def simular_backtest(df, config, balance_inicial=10000.0, contrato=100.0, ventan
     df: DataFrame de velas históricas (columnas time, open, high, low, close),
         ordenadas de más antigua a más reciente. Esta es la temporalidad de
         ENTRADA (ej. M15 si vas a operar en M15).
-    df_macro (opcional): segundo DataFrame, de una temporalidad PRINCIPAL
-        real y MAYOR (ej. H1), usado SOLO por "estructura_dinamica" para
-        medir el movimiento macro (el "ratio" del TP). Si no lo pasas, esa
-        estrategia usa la aproximación de un solo timeframe (menos
-        precisa). Debe traer columna "time" para poder recortarse de forma
-        causal en cada paso (nunca usa velas macro que "todavía no habían
-        cerrado" en ese punto del backtest).
+    df_macro (opcional): segundo DataFrame de temporalidad macro real.
+        Se entrega a estrategias de código libre multi-temporalidad, recortado
+        de forma causal para evitar usar velas que aún no habían cerrado.
     config: mismo dict que config_bot en servidor.py — usa lo que esté activo
             (código libre, bloques visuales, texto, o estrategia registrada),
             más volumen_operacion / sl_operacion / tp_operacion como riesgo.
@@ -281,9 +268,6 @@ def simular_backtest(df, config, balance_inicial=10000.0, contrato=100.0, ventan
                 senales_detectadas += 1
                 oportunidades_detectadas += 1
 
-            # Caso "estructura_dinamica": la señal ya trae su propio sl/tp
-            # (calculados por señal_estructura: sl detrás de la zona, tp
-            # como % del movimiento macro). No se usan sl_puntos/tp_puntos.
             if isinstance(senal, list) and senal:
                 # El backtest mantiene una sola posición abierta; representa
                 # la pata corta si la estrategia devuelve una pareja.
@@ -383,24 +367,15 @@ def simular_backtest(df, config, balance_inicial=10000.0, contrato=100.0, ventan
         ]
     else:
         timeframes_configurados = [timeframe_entrada]
-        if config.get("estrategia") == "estructura_dinamica":
-            timeframe_macro = str(config.get("timeframe_macro", "H1")).upper()
-            if df_macro is not None:
-                timeframes_configurados.append(timeframe_macro)
     if timeframe_entrada not in timeframes_configurados:
         timeframes_configurados.insert(0, timeframe_entrada)
 
     timeframes_recibidos = {timeframe_entrada, *tfs_preparadas.keys()}
-    if config.get("estrategia") == "estructura_dinamica" and df_macro is not None:
-        timeframes_recibidos.add(str(config.get("timeframe_macro", "H1")).upper())
     timeframes_faltantes = [
         tf for tf in timeframes_configurados if tf not in timeframes_recibidos
     ]
 
-    if config.get("estrategia") == "estructura_dinamica":
-        estrategia_activa = config.get("estrategia_biblioteca_activa") or "estructura_dinamica"
-        tipo_estrategia = "catálogo"
-    elif config.get("codigo_estrategia"):
+    if config.get("codigo_estrategia"):
         estrategia_activa = config.get("estrategia_biblioteca_activa") or "Código libre"
         tipo_estrategia = "código libre"
     elif config.get("condiciones_compra") or config.get("condiciones_venta"):

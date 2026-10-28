@@ -20,17 +20,16 @@ from .conexion_mt5 import (
 )
 from .conexion_mt5 import TIMEFRAMES
 from .comandos_telegram import escuchar_comandos_operaciones
-from .riesgo import encolar_aviso_be, riesgo_total_por_operacion, linea_estimacion, estimar_operacion, calculo_completo
+from .riesgo import encolar_aviso_be, linea_estimacion, estimar_operacion
 from .estadisticas import registrar_auto, abrir_operacion, reconciliar_diario, texto_cierre
 from .backtesting import simular_backtest, TF_SEGUNDOS
 from . import historico_csv
-from .riesgo import calcular_lotaje
 from .telegram_bot import enviar_mensaje as tg_enviar_mensaje
 from .indicadores import calcular_rsi, calcular_media_movil
 from .estrategias import (
     evaluar_estrategia, ESTRATEGIAS, evaluar_estrategia_texto,
     BLOQUES, COLUMNAS_DISPONIBLES, evaluar_estrategia_bloques,
-    evaluar_codigo_libre, evaluar_estructura_dinamica,
+    evaluar_codigo_libre,
 )
 from . import estructura as est
 from . import estadisticas as stats
@@ -56,16 +55,11 @@ def _diario_abrir(simbolo, tipo, volumen, resultado, sl, tp, origen=""):
     """Crea la ficha 'en curso' en la bitácora al abrir una operación."""
     try:
         info = obtener_info_cuenta()
-        riesgo_txt = ""
-        if config_bot.get("modo_riesgo") == "porcentaje":
-            riesgo_txt = f"{config_bot.get('riesgo_valor')}% del balance"
-        elif config_bot.get("modo_riesgo") == "monto_fijo":
-            riesgo_txt = f"{config_bot.get('riesgo_valor')} fijo"
         abrir_operacion(
             ticket=resultado.get("ticket"), simbolo=simbolo, tipo=tipo, volumen=volumen,
             entrada=resultado.get("precio"), sl=sl, tp=tp, origen=origen,
             estimacion=estimar_operacion(simbolo, volumen, resultado.get("precio"), sl, tp),
-            balance=info["balance"] if info else None, riesgo_txt=riesgo_txt,
+            balance=info["balance"] if info else None, riesgo_txt="",
         )
     except Exception as e:
         print(f"[diario] error al abrir ficha: {e}")
@@ -141,12 +135,6 @@ config_bot = {
     "volumen_operacion": 0.01,
     "sl_operacion": 0.0,
     "tp_operacion": 0.0,
-    # modo_riesgo: "lotaje_fijo" (usa volumen_operacion tal cual),
-    # "porcentaje" (riesgo_valor = % del balance) o "monto_fijo" (riesgo_valor
-    # = dinero fijo a arriesgar). En estos dos últimos, el lotaje se calcula
-    # solo en cada operación según la distancia real del SL.
-    "modo_riesgo": "lotaje_fijo",
-    "riesgo_valor": 1.0,
     # --- Notificaciones a Telegram ---
     "telegram_activo": False,
     "telegram_bot_token": "",
@@ -156,7 +144,7 @@ config_bot = {
     "telegram_aviso_sl_tp": True,
     "telegram_aviso_parcial": True,
     "telegram_aviso_zona": True,
-    # --- Multi-timeframe (solo lo usa "estructura_dinamica") ---
+    # --- Multi-timeframe ---
     # timeframe_entrada = donde se confirma la entrada (BOS), ej. M15.
     # timeframe_macro = temporalidad PRINCIPAL real usada solo para medir
     # el movimiento macro (el "ratio" del TP), ej. H1. NUNCA se entra ahí.
@@ -230,11 +218,6 @@ config_bot = {
     # bloqueo_noticias_minutos_antes) las operaciones abiertas EN GANANCIA se
     # mueven a BE. No se abren operaciones nuevas (ver bloqueo arriba).
     "noticia_be_activo": True,
-    # Riesgo total: si está activo, el riesgo_total_pct (ej. 1%) del balance se
-    # reparte entre los activos que analiza el bot y sus operaciones máximas,
-    # para no pasarte nunca del total aunque analices más activos.
-    "riesgo_total_activo": False,
-    "riesgo_total_pct": 1.0,
     # Bitácora automática: el bot anota solo cada apertura (con pérdida/ganancia
     # estimada y R:R) y cada cierre por SL/TP.
     "bitacora_auto_activa": True,
@@ -260,7 +243,6 @@ tickets_be_deshabilitado = set()
 # (que seguía en la misma zona, sin cambios reales) el bot creía que era una
 # zona "nueva" y volvía a avisar — o peor, volvía a abrir la MISMA operación
 # dos veces, porque "ultima_senal_ejecutada" tenía el mismo problema.
-ultima_zona_notificada_por_simbolo = {}
 avisos_contexto_multitemporal = set()  # (legado; ya no se usa para deduplicar)
 sesgos_multitemporales_por_tf = {}
 # Cooldown por aviso de contexto. Las llaves NO llevan precios exactos (antes sí,
@@ -389,14 +371,7 @@ estado = {
     "error": None,
     "ultima_senal_ejecutada": None,
     "ultima_orden": None,
-    # Solo se llena cuando la estrategia activa es "estructura_dinamica":
-    # {"estado": "sin_zona"} | {"estado": "esperando_confirmacion", ...} |
-    # {"estado": "confirmada", ...} — ver estructura.estado_actual_estructura().
-    "estado_zona": None,
     "contexto_estructura": None,
-    # Se llena cada vez que el bot manda una orden en modo "porcentaje" o
-    # "monto_fijo": {"lotaje", "dinero_riesgo", "distancia_sl", "advertencia"}.
-    "ultimo_calculo_riesgo": None,
     # Símbolo que el bot está procesando/cotizando ahora mismo (puede ser
     # distinto de config_bot["simbolo"], que es solo el símbolo "principal"
     # guardado en config; el bot realmente opera lo que haya en
@@ -615,12 +590,12 @@ CAMPOS_CONFIG_BOT_PERSISTENTES = [
     "estrategia_biblioteca_activa", "codigo_estrategia", "codigo_usa_multi_temporalidad",
     "condicion_compra_texto", "condicion_venta_texto",
     "condiciones_compra", "operador_compra", "condiciones_venta", "operador_venta",
-    "volumen_operacion", "sl_operacion", "tp_operacion", "modo_riesgo", "riesgo_valor",
+    "volumen_operacion", "sl_operacion", "tp_operacion",
     "timeframe_entrada", "timeframe_macro", "be_activo", "be_porcentaje", "tp_por_liquidez",
     "be_cascada_buffer_pct", "be_dinamico_activo", "be_dinamico_fibo_nivel", "grupos_temporalidad",
     "temporalidades_escaneo", "roles_temporalidad", "zonas_permitidas",
     "max_operaciones_por_simbolo", "filtro_sesgo_macro", "aviso_cambio_direccion",
-    "proteger_cambio_direccion", "noticia_be_activo", "riesgo_total_activo", "riesgo_total_pct",
+    "proteger_cambio_direccion", "noticia_be_activo",
     "bloqueo_noticias_activo", "bloqueo_noticias_minutos_antes", "bitacora_auto_activa",
 ]
 
@@ -643,6 +618,9 @@ def guardar_config_bot():
 # reinicia el backend.
 config_bot.update(cargar_config_bot())
 config_bot.setdefault("max_operaciones_por_simbolo", 1)
+campos_riesgo_legacy = ("modo_riesgo", "riesgo_valor", "riesgo_total_activo", "riesgo_total_pct")
+if any(config_bot.pop(campo, None) is not None for campo in campos_riesgo_legacy):
+    guardar_config_bot()
 
 # Migra formatos antiguos guardados en bot_config.json (por ejemplo, "30m")
 # antes de que el ciclo de trading solicite las velas a MT5.
@@ -664,31 +642,22 @@ for estrategia in biblioteca_estrategias:
 if biblioteca_corregida:
     guardar_biblioteca(biblioteca_estrategias)
 
-# Versiones anteriores podían guardar el código fuente completo de SpotPlus
-# como si fuera código libre. Ese archivo solo declara funciones: no llama a
-# la estrategia ni deja una variable ``senal``, por lo que el backtest acaba
-# con 0 operaciones. Se migra a la representación correcta del motor nativo.
-hubo_migracion_estructura = False
-for estrategia_guardada in biblioteca_estrategias:
-    codigo_guardado = estrategia_guardada.get("codigo", "")
-    es_copia_del_motor = (
-        "def señal_estructura(" in codigo_guardado
-        and "def estado_actual_estructura(" in codigo_guardado
-    )
-    if es_copia_del_motor and not estrategia_guardada.get("es_estructura_dinamica"):
-        estrategia_guardada["es_estructura_dinamica"] = True
-        estrategia_guardada["timeframe_entrada"] = str(estrategia_guardada.get("timeframe_entrada", "M15")).upper()
-        macro = str(estrategia_guardada.get("timeframe_macro", "H1")).upper()
-        estrategia_guardada["timeframe_macro"] = macro if macro in ("M1", "M5", "M15", "H1") else "H1"
-        hubo_migracion_estructura = True
-
-if hubo_migracion_estructura:
+# Elimina de la biblioteca las entradas que pertenecían al antiguo motor
+# nativo de estructura; las estrategias personalizadas de código libre se conservan.
+estrategias_actualizadas = [
+    item for item in biblioteca_estrategias
+    if not item.get("es_estructura_dinamica")
+]
+campos_legacy_eliminados = False
+for item in estrategias_actualizadas:
+    for campo in ("es_estructura_dinamica", "modo_riesgo", "riesgo_valor"):
+        if campo in item:
+            item.pop(campo)
+            campos_legacy_eliminados = True
+if len(estrategias_actualizadas) != len(biblioteca_estrategias) or campos_legacy_eliminados:
+    biblioteca_estrategias = estrategias_actualizadas
     guardar_biblioteca(biblioteca_estrategias)
-    print("✓ Estrategia SpotPlus migrada al motor de estructura nativo")
 
-# Si esa estrategia ya estaba marcada como activa en una instalación previa,
-# cambia también la configuración en memoria para no seguir ejecutando el
-# archivo de funciones como código libre.
 estrategia_guardada_activa = next(
     (item for item in biblioteca_estrategias if item.get("nombre") == config_bot.get("estrategia_biblioteca_activa")),
     None,
@@ -698,27 +667,30 @@ if estrategia_guardada_activa:
     # Evita que bot_config.json conserve una temporalidad de una configuración anterior.
     config_bot["timeframe_entrada"] = _normalizar_timeframe(estrategia_guardada_activa.get("timeframe_entrada"), "M15")
     config_bot["timeframe_macro"] = _normalizar_timeframe(estrategia_guardada_activa.get("timeframe_macro"), "H1")
-if estrategia_guardada_activa and estrategia_guardada_activa.get("es_estructura_dinamica"):
-    config_bot["estrategia"] = "estructura_dinamica"
+estrategia_retirada = (
+    config_bot.get("estrategia") == "estructura_dinamica"
+    or (
+        config_bot.get("estrategia_biblioteca_activa")
+        and estrategia_guardada_activa is None
+    )
+)
+if estrategia_retirada:
+    config_bot["estrategia"] = None
+    config_bot["estrategia_biblioteca_activa"] = None
+    config_bot["parametros"] = {}
     config_bot["codigo_estrategia"] = ""
-    config_bot["codigo_usa_multi_temporalidad"] = False
-    config_bot["timeframe_entrada"] = _normalizar_timeframe(estrategia_guardada_activa.get("timeframe_entrada"), "M15")
-    config_bot["timeframe_macro"] = _normalizar_timeframe(estrategia_guardada_activa.get("timeframe_macro"), "H1")
-    config_bot["parametros"] = dict(estrategia_guardada_activa.get("parametros", {}) or {})
     guardar_config_bot()
 
 # Si NO había nada persistido de una sesión anterior (primera vez que corre el
 # bot, o bot_config.json no existe), cae de vuelta a la primera estrategia
 # guardada como estrategia activa por defecto.
-if biblioteca_estrategias and not config_bot.get("estrategia_biblioteca_activa") \
+if biblioteca_estrategias and not estrategia_retirada and not config_bot.get("estrategia_biblioteca_activa") \
         and not config_bot.get("estrategia") and not config_bot.get("codigo_estrategia"):
     estrategia_inicial = biblioteca_estrategias[0]
     config_bot["codigo_estrategia"] = estrategia_inicial.get("codigo", "")
     config_bot["volumen_operacion"] = estrategia_inicial.get("volumen", 0.01)
     config_bot["sl_operacion"] = estrategia_inicial.get("sl", 0.0)
     config_bot["tp_operacion"] = estrategia_inicial.get("tp", 0.0)
-    config_bot["modo_riesgo"] = estrategia_inicial.get("modo_riesgo", "lotaje_fijo")
-    config_bot["riesgo_valor"] = estrategia_inicial.get("riesgo_valor", 1.0)
     print(f"✓ Estrategia cargada al iniciar: {estrategia_inicial['nombre']}")
 else:
     print("✓ Config del bot restaurada desde bot_config.json")
@@ -779,13 +751,13 @@ def ciclo_bot():
                             df_macro = velas_por_temporalidad[disponibles[-1]]
                     else:
                         df = None
-                elif config_bot["estrategia"] == "estructura_dinamica" or config_bot["codigo_estrategia"]:
+                elif config_bot["codigo_estrategia"]:
                     df, df_macro = obtener_velas_multi(
                         simbolo=simbolo,
                         timeframe_entrada=config_bot["timeframe_entrada"],
                         timeframe_macro=config_bot["timeframe_macro"],
                     )
-                    if not config_bot.get("codigo_usa_multi_temporalidad") and config_bot["estrategia"] != "estructura_dinamica":
+                    if not config_bot.get("codigo_usa_multi_temporalidad"):
                         df_macro = None
                 else:
                     df = obtener_velas(simbolo=simbolo)
@@ -817,7 +789,7 @@ def ciclo_bot():
                         )
 
                 senal = None
-                senal_dinamica = None
+                senal_con_sl_tp = None
                 operaciones_multiples = None  # lista de varias entradas simultáneas (una por temporalidad)
                 # Se trae UNA sola vez por ciclo (si hay temporalidades_escaneo
                 # configuradas) para que la use tanto el código libre como el
@@ -926,56 +898,7 @@ def ciclo_bot():
                             + "\n".join(lineas)
                             + "\nSe prioriza el marco mayor."
                         )
-                if config_bot["estrategia"] == "estructura_dinamica":
-                    senal_dinamica = evaluar_estructura_dinamica(df, config_bot["parametros"], df_macro=df_macro)
-                    senal = senal_dinamica["tipo"] if senal_dinamica else None
-                    p = config_bot["parametros"]
-                    estado["estado_zona"] = est.estado_actual_estructura(
-                        df,
-                        pivot_len=int(p.get("pivot_len", 5)),
-                        pivot_len_macro=int(p.get("pivot_len_macro", 15)),
-                        tolerancia_pct=float(p.get("tolerancia_pct", 0.15)),
-                        porcentaje_tp=float(p.get("porcentaje_tp", 0.8)),
-                        sl_buffer_pct=float(p.get("sl_buffer_pct", 0.1)),
-                        max_velas_desde_zona=(int(p["max_velas_desde_zona"]) if float(p.get("max_velas_desde_zona", 0)) > 0 else None),
-                        df_macro=df_macro,
-                        minimo_ratio_tp=(float(p["minimo_ratio_tp"]) if float(p.get("minimo_ratio_tp", 0)) > 0 else None),
-                    )
-                else:
-                    estado["estado_zona"] = None
-
-                global ultima_zona_notificada_por_simbolo
-                zona = estado["estado_zona"]
-                if zona and zona.get("estado") == "esperando_confirmacion":
-                    clave_zona = (zona.get("tipo"), zona.get("zona_precio"))
-                    if clave_zona != ultima_zona_notificada_por_simbolo.get(simbolo):
-                        ultima_zona_notificada_por_simbolo[simbolo] = clave_zona
-                        if config_bot["telegram_aviso_zona"]:
-                            notificar(
-                                f"⏳ <b>Zona tocada — esperando confirmación</b>\n"
-                                f"{simbolo} · {(zona.get('tipo') or '').upper()} en {zona.get('zona_precio')}\n"
-                                f"Aún falta el rompimiento de estructura (BOS) a favor."
-                            )
-                # OJO: a propósito NO se borra ultima_zona_notificada_por_simbolo
-                # cuando el estado pasa a "sin_zona". El indicador puede
-                # "parpadear" (esperando_confirmacion -> sin_zona -> esperando_confirmacion
-                # otra vez, con el MISMO precio de zona) de una vela a otra por
-                # ruido normal del precio, y si se borraba aquí, cada parpadeo
-                # mandaba el aviso de nuevo — eso era el spam de "Zona tocada"
-                # repetida cada 1-3 minutos con el mismo precio. Ahora solo se
-                # vuelve a avisar cuando aparece una zona REALMENTE distinta
-                # (otro tipo o otro precio).
-                #
-                # ... con una excepción: cuando la zona ya se CONFIRMÓ (se
-                # ejecutó o está por ejecutarse la operación), sí se libera la
-                # memoria, para que la siguiente zona de espera (aunque caiga
-                # en un precio parecido) pueda avisar de nuevo.
-                if zona and zona.get("estado") == "confirmada":
-                    ultima_zona_notificada_por_simbolo.pop(simbolo, None)
-
-                if config_bot["estrategia"] == "estructura_dinamica":
-                    pass
-                elif config_bot["codigo_estrategia"]:
+                if config_bot["codigo_estrategia"]:
                     senal = evaluar_codigo_libre(
                         df, config_bot["codigo_estrategia"], df_macro=df_macro,
                         velas_por_temporalidad=velas_por_temporalidad,
@@ -998,14 +921,13 @@ def ciclo_bot():
                             if len(pareja) != 2:
                                 continue
                             for operacion in pareja:
-                                if config_bot["modo_riesgo"] in ("porcentaje", "monto_fijo"):
-                                    operacion["riesgo_valor"] = config_bot["riesgo_valor"] / 2
-                                else:
-                                    operacion["volumen"] = config_bot["volumen_operacion"] / 2
+                                operacion["volumen"] = (
+                                    float(operacion.get("volumen") or config_bot["volumen_operacion"]) / 2
+                                )
                         senal = None  # no sigue el camino de "una sola señal" más abajo
                     elif isinstance(senal, dict):
-                        senal_dinamica = senal  # trae su propio sl/tp, igual que estructura_dinamica
-                        senal = senal_dinamica["tipo"]
+                        senal_con_sl_tp = senal
+                        senal = senal_con_sl_tp["tipo"]
                 elif config_bot["condiciones_compra"] or config_bot["condiciones_venta"]:
                     senal = evaluar_estrategia_bloques(
                         df,
@@ -1212,41 +1134,6 @@ def ciclo_bot():
                             tp_envio = op["tp_liquidez"]
                         volumen_envio = op.get("volumen") or config_bot["volumen_operacion"]
 
-                        # Si esta operación trae su propio riesgo_valor (repartido por
-                        # est.dividir_riesgo_entre_operaciones), se usa ESE en vez del
-                        # % global de la estrategia; si no trae, cae al modo de riesgo
-                        # configurado normalmente.
-                        riesgo_de_esta_operacion = op.get("riesgo_valor")
-                        pct_total_op = riesgo_total_por_operacion(config_bot, len(_simbolos_permitidos()))
-                        if pct_total_op is not None:
-                            riesgo_de_esta_operacion = pct_total_op  # tope total: manda sobre el valor de la estrategia
-                        if riesgo_de_esta_operacion is not None and sl_envio:
-                            info_cuenta = obtener_info_cuenta()
-                            balance = info_cuenta["balance"] if info_cuenta else None
-                            calculo = calcular_lotaje(
-                                balance=balance,
-                                precio_entrada=precio["ask"] if op["tipo"] == "compra" else precio["bid"],
-                                sl=sl_envio,
-                                simbolo=simbolo,
-                                modo="porcentaje" if (config_bot["modo_riesgo"] == "porcentaje" or pct_total_op is not None) else "fijo",
-                                valor=riesgo_de_esta_operacion,
-                            )
-                            if calculo is not None:
-                                volumen_envio = calculo["lotaje"]
-                        elif config_bot["modo_riesgo"] in ("porcentaje", "monto_fijo") and sl_envio:
-                            info_cuenta = obtener_info_cuenta()
-                            balance = info_cuenta["balance"] if info_cuenta else None
-                            calculo = calcular_lotaje(
-                                balance=balance,
-                                precio_entrada=precio["ask"] if op["tipo"] == "compra" else precio["bid"],
-                                sl=sl_envio,
-                                simbolo=simbolo,
-                                modo="porcentaje" if config_bot["modo_riesgo"] == "porcentaje" else "fijo",
-                                valor=config_bot["riesgo_valor"],
-                            )
-                            if calculo is not None:
-                                volumen_envio = calculo["lotaje"]
-
                         resultado_multi = enviar_orden_manual(
                             tipo=op["tipo"],
                             volumen=volumen_envio,
@@ -1307,31 +1194,14 @@ def ciclo_bot():
                             f"({evento_bloqueante.get('country')})"
                         )
                     else:
-                        if senal_dinamica is not None:
-                            sl_envio = senal_dinamica.get("sl") or 0.0
-                            tp_envio = senal_dinamica.get("tp") or 0.0
+                        if senal_con_sl_tp is not None:
+                            sl_envio = senal_con_sl_tp.get("sl") or 0.0
+                            tp_envio = senal_con_sl_tp.get("tp") or 0.0
                         else:
                             sl_envio = config_bot["sl_operacion"]
                             tp_envio = config_bot["tp_operacion"]
 
                         volumen_envio = config_bot["volumen_operacion"]
-                        estado["ultimo_calculo_riesgo"] = None
-                        pct_total_op = riesgo_total_por_operacion(config_bot, len(_simbolos_permitidos()))
-                        if (pct_total_op is not None or config_bot["modo_riesgo"] in ("porcentaje", "monto_fijo")) and sl_envio:
-                            info_cuenta = obtener_info_cuenta()
-                            balance = info_cuenta["balance"] if info_cuenta else None
-                            calculo = calcular_lotaje(
-                                balance=balance,
-                                precio_entrada=precio["ask"] if senal == "compra" else precio["bid"],
-                                sl=sl_envio,
-                                simbolo=simbolo,
-                                modo="porcentaje" if (config_bot["modo_riesgo"] == "porcentaje" or pct_total_op is not None) else "fijo",
-                                valor=pct_total_op if pct_total_op is not None else config_bot["riesgo_valor"],
-                            )
-                            if calculo is not None:
-                                volumen_envio = calculo["lotaje"]
-                                estado["ultimo_calculo_riesgo"] = calculo
-
                         resultado = enviar_orden_manual(
                             tipo=senal,
                             volumen=volumen_envio,
@@ -1482,8 +1352,8 @@ class ConfigRequest(BaseModel):
     estrategia: str | None = None
     parametros: dict | None = None
     activo: bool | None = None
-    timeframe_entrada: str | None = None  # ej. "M15" - solo usado por estructura_dinamica
-    timeframe_macro: str | None = None    # ej. "H1" - solo usado por estructura_dinamica
+    timeframe_entrada: str | None = None
+    timeframe_macro: str | None = None
     temporalidades_escaneo: list[str] | None = None  # ej. ["M5","M15","H1","H4"] - para est.escanear_multitemporalidad() en código libre
     roles_temporalidad: dict[str, str] | None = None
     zonas_permitidas: list[str] | None = None
@@ -1498,9 +1368,7 @@ class ConfigRequest(BaseModel):
     proteger_cambio_direccion: bool | None = None
     tp_por_liquidez: bool | None = None   # True = operaciones múltiples usan TP en liquidez
     max_operaciones_por_simbolo: int | None = None  # 0 = sin límite; ej. 2 = máximo 2 abiertas a la vez por símbolo
-    modo_riesgo: str | None = None        # "lotaje_fijo" | "porcentaje" | "monto_fijo"
-    riesgo_valor: float | None = None
-    volumen_operacion: float | None = None  # lotes fijos, cuando modo_riesgo == "lotaje_fijo"
+    volumen_operacion: float | None = None
     sl_operacion: float | None = None
     tp_operacion: float | None = None
     circuito_perdida_diaria_activo: bool | None = None
@@ -1509,8 +1377,6 @@ class ConfigRequest(BaseModel):
     bloqueo_noticias_activo: bool | None = None
     bloqueo_noticias_minutos_antes: int | None = None
     noticia_be_activo: bool | None = None
-    riesgo_total_activo: bool | None = None
-    riesgo_total_pct: float | None = None
     bitacora_auto_activa: bool | None = None
 
 
@@ -1544,12 +1410,6 @@ class EstrategiaGuardadaRequest(BaseModel):
     volumen: float = 0.01
     sl: float = 0.0
     tp: float = 0.0
-    # --- Gestión de riesgo de esta estrategia ---
-    # modo_riesgo: "lotaje_fijo" (usa "volumen" tal cual), "porcentaje" (riesgo_valor
-    # = % del balance) o "monto_fijo" (riesgo_valor = dinero fijo). En estos dos
-    # últimos, el bot calcula el lotaje solo en cada operación según el SL.
-    modo_riesgo: str = "lotaje_fijo"
-    riesgo_valor: float = 1.0
     # --- Multi-temporalidad opcional para código libre ---
     usa_multi_temporalidad: bool = False
     timeframe_entrada: str = "M15"
@@ -1565,10 +1425,6 @@ class EstrategiaGuardadaRequest(BaseModel):
     # bot). Si trae símbolos, el bot solo la aplica en esos, aunque el global
     # tenga más activos permitidos.
     activos: list[str] = []
-    # Si es una estrategia de motor dinámico (SpotPlus Estructura): al
-    # activarla se reactiva el motor real en vez de tratar "codigo" como
-    # código libre. Se preserva al editar/guardar desde el frontend.
-    es_estructura_dinamica: bool = False
 
 
 # ---------- Endpoints de estado ----------
@@ -1687,9 +1543,6 @@ def _correr_backtest_en_hilo(job_id, desde, hasta, balance_inicial, timeframe_en
 
         df_macro = None
         tf_macro = timeframe_macro or config_bot.get("timeframe_macro") or None
-        if config_bot.get("estrategia") == "estructura_dinamica" and tf_macro:
-            df_macro = obtener_velas_historicas(simbolo, desde, hasta, timeframe_str=tf_macro)
-
         contrato = obtener_tamano_contrato(simbolo) or 100.0
 
         # La simulación usa las temporalidades elegidas para ESTE backtest
@@ -2047,10 +1900,6 @@ def post_config(cfg: ConfigRequest):
         config_bot["tp_por_liquidez"] = cfg.tp_por_liquidez
     if cfg.max_operaciones_por_simbolo is not None:
         config_bot["max_operaciones_por_simbolo"] = cfg.max_operaciones_por_simbolo
-    if cfg.modo_riesgo is not None and cfg.modo_riesgo in ("lotaje_fijo", "porcentaje", "monto_fijo"):
-        config_bot["modo_riesgo"] = cfg.modo_riesgo
-    if cfg.riesgo_valor is not None:
-        config_bot["riesgo_valor"] = cfg.riesgo_valor
     if cfg.volumen_operacion is not None:
         config_bot["volumen_operacion"] = cfg.volumen_operacion
     if cfg.sl_operacion is not None:
@@ -2071,46 +1920,8 @@ def post_config(cfg: ConfigRequest):
         config_bot["noticia_be_activo"] = cfg.noticia_be_activo
     if cfg.bitacora_auto_activa is not None:
         config_bot["bitacora_auto_activa"] = cfg.bitacora_auto_activa
-    if cfg.riesgo_total_activo is not None:
-        config_bot["riesgo_total_activo"] = cfg.riesgo_total_activo
-    if cfg.riesgo_total_pct is not None:
-        config_bot["riesgo_total_pct"] = max(0.01, min(float(cfg.riesgo_total_pct), 100.0))
     guardar_config_bot()
     return config_bot
-
-
-class CalculoRiesgoRequest(BaseModel):
-    precio_entrada: float
-    sl: float
-    modo_riesgo: str = "porcentaje"  # "porcentaje" o "monto_fijo"
-    riesgo_valor: float = 1.0
-    simbolo: str | None = None
-    tp: float | None = None
-    parcial_pct: float | None = None
-    parcial_distancia: float | None = None
-
-
-@app.post("/api/calcular_riesgo")
-def post_calcular_riesgo(req: CalculoRiesgoRequest):
-    """Previsualiza el lotaje sugerido para un SL dado, sin mandar ninguna orden.
-    Lo usa la pantalla de estrategia para mostrar 'lotaje sugerido' mientras
-    Vale configura el % o monto a arriesgar."""
-    info_cuenta = obtener_info_cuenta()
-    balance = info_cuenta["balance"] if info_cuenta else None
-    resultado = calculo_completo(
-        balance=balance,
-        entrada=req.precio_entrada,
-        sl=req.sl,
-        tp=req.tp or 0.0,
-        simbolo=req.simbolo or config_bot["simbolo"],
-        modo="porcentaje" if req.modo_riesgo == "porcentaje" else "fijo",
-        valor=req.riesgo_valor,
-        parcial_pct=req.parcial_pct,
-        parcial_distancia=req.parcial_distancia,
-    )
-    if resultado is None:
-        return {"error": "Faltan datos para calcular (revisa balance, precio y SL)"}
-    return resultado
 
 
 # ---------- Notificaciones a Telegram ----------
@@ -2277,11 +2088,6 @@ def _guardar_estrategia_en_biblioteca(item: dict):
         "volumen": float(item.get("volumen", 0.01) or 0.01),
         "sl": float(item.get("sl", 0.0) or 0.0),
         "tp": float(item.get("tp", 0.0) or 0.0),
-        "modo_riesgo": item.get("modo_riesgo", "lotaje_fijo") if item.get("modo_riesgo") in ("lotaje_fijo", "porcentaje", "monto_fijo") else "lotaje_fijo",
-        "riesgo_valor": float(item.get("riesgo_valor", 1.0) or 1.0),
-        # Si viene de "estructura_dinamica" (multi-temporalidad), se guarda TODO estructurado
-        # (no como comentarios en "codigo") para poder reactivar el motor real al activarla.
-        "es_estructura_dinamica": bool(item.get("es_estructura_dinamica", False)),
         "usa_multi_temporalidad": bool(item.get("usa_multi_temporalidad", False)),
         "timeframe_entrada": _normalizar_timeframe(item.get("timeframe_entrada"), "M15"),
         "timeframe_macro": _normalizar_timeframe(item.get("timeframe_macro"), "H1"),
@@ -2317,8 +2123,6 @@ def post_estrategia_guardada(estrategia: EstrategiaGuardadaRequest):
         "volumen": estrategia.volumen,
         "sl": estrategia.sl,
         "tp": estrategia.tp,
-        "modo_riesgo": estrategia.modo_riesgo,
-        "riesgo_valor": estrategia.riesgo_valor,
         "usa_multi_temporalidad": estrategia.usa_multi_temporalidad,
         "timeframe_entrada": estrategia.timeframe_entrada,
         "timeframe_macro": estrategia.timeframe_macro,
@@ -2327,7 +2131,6 @@ def post_estrategia_guardada(estrategia: EstrategiaGuardadaRequest):
         "zonas_permitidas": estrategia.zonas_permitidas,
         "parametros": estrategia.parametros,
         "activos": estrategia.activos,
-        "es_estructura_dinamica": estrategia.es_estructura_dinamica,
     })
 
 
@@ -2335,26 +2138,7 @@ def post_estrategia_guardada(estrategia: EstrategiaGuardadaRequest):
 def post_estrategia_guardada_desde_actual(estrategia: EstrategiaGuardadaRequest):
     """Guarda la estrategia activa del backend en la biblioteca, aunque venga de un preset
     de SpotPlus o de otra estrategia no editada como código libre."""
-    esencia = config_bot.get("estrategia")
-    es_estructura = esencia == "estructura_dinamica"
-    if es_estructura:
-        params = config_bot.get("parametros", {}) or {}
-        lineas_params = "\n".join(
-            f"# {clave}={valor}" for clave, valor in params.items()
-        )
-        # "codigo" queda solo como resumen legible (para "Ver código"); lo que de verdad
-        # se usa al activar son los campos estructurados de abajo (parametros, timeframes).
-        codigo = (
-            "# Estrategia SpotPlus multi-temporalidad (resumen, informativo)\n"
-            f"# entrada={config_bot.get('timeframe_entrada', 'M15')}\n"
-            f"# macro={config_bot.get('timeframe_macro', 'H1')}\n"
-            f"# modo_riesgo={config_bot.get('modo_riesgo', 'lotaje_fijo')}\n"
-            f"# volumen={config_bot.get('volumen_operacion', 0.01)}\n"
-            + (lineas_params + "\n" if lineas_params else "")
-            + "# Al activarla desde la biblioteca se reactiva el motor real (no este texto)."
-        )
-    else:
-        codigo = config_bot.get("codigo_estrategia") or config_bot.get("condicion_compra_texto") or ""
+    codigo = config_bot.get("codigo_estrategia") or config_bot.get("condicion_compra_texto") or ""
 
     return _guardar_estrategia_en_biblioteca({
         "nombre": estrategia.nombre,
@@ -2363,9 +2147,6 @@ def post_estrategia_guardada_desde_actual(estrategia: EstrategiaGuardadaRequest)
         "volumen": estrategia.volumen or config_bot.get("volumen_operacion", 0.01),
         "sl": estrategia.sl or config_bot.get("sl_operacion", 0.0),
         "tp": estrategia.tp or config_bot.get("tp_operacion", 0.0),
-        "modo_riesgo": estrategia.modo_riesgo or config_bot.get("modo_riesgo", "lotaje_fijo"),
-        "riesgo_valor": estrategia.riesgo_valor or config_bot.get("riesgo_valor", 1.0),
-        "es_estructura_dinamica": es_estructura,
         "timeframe_entrada": config_bot.get("timeframe_entrada", "M15"),
         "timeframe_macro": config_bot.get("timeframe_macro", "H1"),
         "parametros": config_bot.get("parametros", {}) or {},
@@ -2380,34 +2161,21 @@ def post_activar_estrategia_guardada(nombre: str):
     if encontrada is None:
         return {"error": "No existe una estrategia guardada con ese nombre"}
 
-    if encontrada.get("es_estructura_dinamica"):
-        # Reactiva el motor real multi-temporalidad (vuelve a traer velas de
-        # entrada + macro por separado), en vez de tratarla como código libre.
-        config_bot["estrategia"] = "estructura_dinamica"
-        config_bot["timeframe_entrada"] = _normalizar_timeframe(encontrada.get("timeframe_entrada"), "M15")
-        config_bot["timeframe_macro"] = _normalizar_timeframe(encontrada.get("timeframe_macro"), "H1")
-        config_bot["parametros"] = dict(encontrada.get("parametros", {}) or {})
-        config_bot["codigo_estrategia"] = ""
-        config_bot["codigo_usa_multi_temporalidad"] = False
-        config_bot["temporalidades_escaneo"] = []
-    else:
-        config_bot["codigo_estrategia"] = encontrada["codigo"]
-        config_bot["estrategia"] = None
-        config_bot["codigo_usa_multi_temporalidad"] = bool(encontrada.get("usa_multi_temporalidad", False))
-        config_bot["timeframe_entrada"] = _normalizar_timeframe(encontrada.get("timeframe_entrada"), "M15")
-        config_bot["timeframe_macro"] = _normalizar_timeframe(encontrada.get("timeframe_macro"), "H1")
-        config_bot["temporalidades_escaneo"] = _normalizar_temporalidades_escaneo(
-            encontrada.get("temporalidades_escaneo")
-        )
-        config_bot["roles_temporalidad"] = dict(encontrada.get("roles_temporalidad", {}) or {})
-        config_bot["zonas_permitidas"] = _limpiar_zonas_permitidas(encontrada.get("zonas_permitidas"))
-        config_bot["parametros"] = dict(encontrada.get("parametros", {}) or {})
+    config_bot["codigo_estrategia"] = encontrada["codigo"]
+    config_bot["estrategia"] = None
+    config_bot["codigo_usa_multi_temporalidad"] = bool(encontrada.get("usa_multi_temporalidad", False))
+    config_bot["timeframe_entrada"] = _normalizar_timeframe(encontrada.get("timeframe_entrada"), "M15")
+    config_bot["timeframe_macro"] = _normalizar_timeframe(encontrada.get("timeframe_macro"), "H1")
+    config_bot["temporalidades_escaneo"] = _normalizar_temporalidades_escaneo(
+        encontrada.get("temporalidades_escaneo")
+    )
+    config_bot["roles_temporalidad"] = dict(encontrada.get("roles_temporalidad", {}) or {})
+    config_bot["zonas_permitidas"] = _limpiar_zonas_permitidas(encontrada.get("zonas_permitidas"))
+    config_bot["parametros"] = dict(encontrada.get("parametros", {}) or {})
 
     config_bot["volumen_operacion"] = encontrada.get("volumen", 0.01)
     config_bot["sl_operacion"] = encontrada.get("sl", 0.0)
     config_bot["tp_operacion"] = encontrada.get("tp", 0.0)
-    config_bot["modo_riesgo"] = encontrada.get("modo_riesgo", "lotaje_fijo")
-    config_bot["riesgo_valor"] = encontrada.get("riesgo_valor", 1.0)
     # Si la estrategia trae su propia lista de activos, manda sobre la lista
     # global de "activos permitidos" mientras esté activa. Si viene vacía,
     # se respeta la lista global tal cual estaba.
@@ -2444,12 +2212,8 @@ def post_reset_total_estrategia():
     config_bot["volumen_operacion"] = 0.01
     config_bot["sl_operacion"] = 0.0
     config_bot["tp_operacion"] = 0.0
-    config_bot["modo_riesgo"] = "lotaje_fijo"
-    config_bot["riesgo_valor"] = 1.0
     estado["ultima_senal_ejecutada"] = None
     ultima_senal_ejecutada_por_simbolo.clear()
-    ultima_zona_notificada_por_simbolo.clear()
-    estado["estado_zona"] = None
     guardar_config_bot()
     return {"reseteado": True}
 
