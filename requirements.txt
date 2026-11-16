@@ -1,8 +1,8 @@
 fastapi
 uvicorn
 pydantic
-pandas
-numpy
+pandas==2.2.3
+numpy==1.26.4
 requests
 python-dotenv
 MetaTrader5; sys_platform == "win32"
