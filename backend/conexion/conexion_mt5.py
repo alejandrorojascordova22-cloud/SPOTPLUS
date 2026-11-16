@@ -1,17 +1,21 @@
-try:
-    import MetaTrader5 as mt5
-    MT5_AVAILABLE = True
-except ImportError:
-    mt5 = None
-    MT5_AVAILABLE = False
+from .mt5_compat import mt5, MT5_AVAILABLE
+import atexit
+import errno
 import functools
+import hashlib
+import math
+import os
+import tempfile
 import threading
+import time
 import pandas as pd
+from contextlib import contextmanager
+from ..procesos.proceso_mt5 import close_owned_terminal_processes, terminal_process_ids
 
 # Bloque seguro para importar MetaTrader5 en Linux o Windows
 
 
-from .config import (
+from ..config import (
     MT5_LOGIN, 
     MT5_PASSWORD, 
     MT5_SERVER, 
@@ -25,34 +29,105 @@ TIMEFRAMES = {
     for k in ["M1","M3","M5","M15","M30","H1","H2","H4","D1","W1","MN1"]
 }
 
-# La librería MetaTrader5 NO es segura para llamarse desde varios hilos al
-# mismo tiempo. Este backend tiene el hilo de fondo ciclo_bot() (revisa
-# precios/velas cada 60s) además del hilo que atiende cada request HTTP
-# (FastAPI corre las funciones "def" normales en un threadpool). Si ambos
-# llaman a mt5.* en el mismo instante, MT5 puede cortar la conexión sin dar
-# respuesta -> el navegador lo ve como "Failed to fetch"/CORS aunque el
-# problema real no tiene nada que ver con CORS. Este candado obliga a que
-# solo un hilo hable con MT5 a la vez.
+# La librería MetaTrader5 no es segura para llamadas concurrentes. El candado
+# de archivo coordina también los procesos independientes del servidor y el
+# escáner cuando comparten la misma terminal.
 _mt5_lock = threading.RLock()
+_mt5_lock_depth = threading.local()
+_owned_terminal_pids = set()
+_mt5_initialized = False
+
+
+_terminal_key = hashlib.sha256(
+    os.path.normcase(os.path.abspath(TERMINAL_PATH)).encode("utf-8")
+).hexdigest()[:16]
+_mt5_process_lock_path = os.path.join(
+    tempfile.gettempdir(),
+    "spotplus-mt5-%s.lock" % _terminal_key,
+)
+
+
+@contextmanager
+def _bloqueo_proceso_mt5():
+    with open(_mt5_process_lock_path, "a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as error:
+                    if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    time.sleep(0.05)
+
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def bloqueo_mt5():
+    with _mt5_lock:
+        depth = getattr(_mt5_lock_depth, "value", 0)
+        if depth:
+            _mt5_lock_depth.value = depth + 1
+            try:
+                yield
+            finally:
+                _mt5_lock_depth.value -= 1
+            return
+
+        with _bloqueo_proceso_mt5():
+            _mt5_lock_depth.value = 1
+            try:
+                yield
+            finally:
+                del _mt5_lock_depth.value
 
 
 def _con_candado(func):
-    """Envuelve una función para que TODO su cuerpo corra con el candado de
-    MT5 tomado (ninguna otra función decorada puede correr al mismo tiempo)."""
+    """Serializa las llamadas MT5 entre hilos y procesos."""
     @functools.wraps(func)
     def envoltura(*args, **kwargs):
-        with _mt5_lock:
+        with bloqueo_mt5():
             return func(*args, **kwargs)
     return envoltura
 
 
 @_con_candado
 def conectar():
+    global _mt5_initialized
+
     # TERMINAL_PATH viene de config.py: si este proceso arranco con
     # CUENTA_ID=algo, apunta al terminal MT5 propio de esa cuenta (cada
     # cuenta necesita su propia instalacion de MT5, ya que un mismo
     # terminal64.exe solo puede iniciar sesion en una cuenta a la vez).
-    if not mt5.initialize(path=TERMINAL_PATH):
+    procesos_antes = terminal_process_ids(TERMINAL_PATH)
+    inicializado = mt5.initialize(path=TERMINAL_PATH)
+    if inicializado:
+        _mt5_initialized = True
+    _owned_terminal_pids.update(
+        terminal_process_ids(TERMINAL_PATH) - procesos_antes
+    )
+    if not inicializado:
         print(f"[{NOMBRE_CUENTA}] Error al iniciar MT5:", mt5.last_error())
         return False
 
@@ -66,25 +141,35 @@ def conectar():
 
 @_con_candado
 def desconectar():
-    mt5.shutdown()
+    global _mt5_initialized
+
+    try:
+        if mt5 is not None and _mt5_initialized:
+            mt5.shutdown()
+    finally:
+        _mt5_initialized = False
+        procesos_propios = set(_owned_terminal_pids)
+        _owned_terminal_pids.clear()
+        close_owned_terminal_processes(TERMINAL_PATH, procesos_propios)
+
+
+atexit.register(desconectar)
 
 
 @_con_candado
 def verificar_conexion():
-    """Watchdog de reconexión: antes, si el terminal MT5 se caía o perdía la
-    sesión a mitad de la corrida, nada lo notaba hasta que una llamada
-    cualquiera fallaba (o directamente no se notaba y el bot se quedaba
-    "vivo" pero sin poder operar). Se llama al inicio de cada vuelta del
-    ciclo del bot; si detecta que la conexión ya no responde, reconecta sola.
-    Devuelve True si al final de la función la conexión está en pie."""
+    """Comprueba la conexión activa sin abrir otra terminal si se perdió."""
     info_terminal = mt5.terminal_info()
     info_cuenta = mt5.account_info()
     if info_terminal is not None and info_cuenta is not None:
         return True
 
-    print(f"[{NOMBRE_CUENTA}] Conexión con MT5 caída, reconectando...", mt5.last_error())
-    mt5.shutdown()
-    return conectar()
+    print(
+        f"[{NOMBRE_CUENTA}] Conexión con MT5 caída; "
+        "no se reconectará automáticamente.",
+        mt5.last_error(),
+    )
+    return False
 
 
 def _seleccionar_simbolo(simbolo):
@@ -98,7 +183,7 @@ def _seleccionar_simbolo(simbolo):
     return False
 
 
-def _copiar_velas_con_reconexion(simbolo, timeframe, cantidad):
+def _copiar_velas(simbolo, timeframe, cantidad):
     if not _seleccionar_simbolo(simbolo):
         return None
 
@@ -106,20 +191,31 @@ def _copiar_velas_con_reconexion(simbolo, timeframe, cantidad):
     if velas is not None and len(velas) > 0:
         return velas
 
-    if mt5.last_error()[0] != -10001:
-        return None
+    return None
 
-    mt5.shutdown()
-    if not conectar():
-        return None
-    if not _seleccionar_simbolo(simbolo):
-        return None
 
-    velas = mt5.copy_rates_from_pos(simbolo, timeframe, 0, cantidad)
-    return velas if velas is not None and len(velas) > 0 else None
+@_con_candado
+def rango_velas_disponible(simbolo, timeframe_str, cantidad=100000):
+    """Devuelve los límites de las velas recientes de MT5 para una temporalidad."""
+    timeframe = TIMEFRAMES.get(str(timeframe_str).upper())
+    if timeframe is None:
+        raise ValueError(f"Temporalidad no válida: {timeframe_str}")
+    velas = _copiar_velas(simbolo, timeframe, cantidad)
+    if velas is None:
+        return None
+    tiempos = pd.to_datetime(velas["time"], unit="s")
+    return tiempos.min(), tiempos.max()
 
 
 MENSAJES_RETCODE = {
+    10026: (
+        "El SERVIDOR del bróker desactivó el trading automático (API/EA) para esta "
+        "cuenta (10026). No es un fallo del bot ni de la terminal: Exness lo aplica "
+        "del lado servidor (en demo suele pasar con demasiadas operaciones/lotes o "
+        "demasiadas modificaciones seguidas). Las modificaciones MANUALES desde la "
+        "terminal MT5 normalmente sí funcionan. Si persiste, contacta a soporte de "
+        "Exness o crea otra cuenta demo."
+    ),
     10018: "Mercado cerrado para este símbolo ahora mismo",
     10019: "Fondos insuficientes para abrir esta operación",
     10021: "El bróker no tiene cotización disponible para este símbolo ahora mismo",
@@ -145,7 +241,7 @@ def _error_orden(resultado):
 @_con_candado
 def obtener_velas(simbolo=SIMBOLO, cantidad=200):
     timeframe = TIMEFRAMES.get(TIMEFRAME_STR, mt5.TIMEFRAME_M5)
-    velas = _copiar_velas_con_reconexion(simbolo, timeframe, cantidad)
+    velas = _copiar_velas(simbolo, timeframe, cantidad)
 
     if velas is None:
         print("Error al traer velas:", mt5.last_error())
@@ -172,8 +268,8 @@ def obtener_velas_multi(simbolo=SIMBOLO, timeframe_entrada=TIMEFRAME_STR, timefr
     tf_entrada = TIMEFRAMES.get(timeframe_entrada, mt5.TIMEFRAME_M15)
     tf_macro = TIMEFRAMES.get(timeframe_macro, mt5.TIMEFRAME_H1)
 
-    velas_entrada = _copiar_velas_con_reconexion(simbolo, tf_entrada, cantidad_entrada)
-    velas_macro = _copiar_velas_con_reconexion(simbolo, tf_macro, cantidad_macro)
+    velas_entrada = _copiar_velas(simbolo, tf_entrada, cantidad_entrada)
+    velas_macro = _copiar_velas(simbolo, tf_macro, cantidad_macro)
 
     df_entrada = None
     if velas_entrada is not None:
@@ -213,7 +309,7 @@ def obtener_velas_varias_temporalidades(simbolo=SIMBOLO, temporalidades=None, ca
         if tf_mt5 is None:
             print(f"Temporalidad no reconocida, se ignora: {tf_str}")
             continue
-        velas = _copiar_velas_con_reconexion(simbolo, tf_mt5, cantidad)
+        velas = _copiar_velas(simbolo, tf_mt5, cantidad)
         if velas is None:
             print(f"Error al traer velas de {tf_str}:", mt5.last_error())
             continue
@@ -247,19 +343,24 @@ def obtener_info_cuenta():
         "margen_libre": info.margin_free,
         "apalancamiento": info.leverage,
         "moneda": info.currency,
-        "es_real": info.trade_mode == 0,  # 0 = real, 1 = demo, 2 = contest
+        "es_real": info.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL,
     }
 
 
+@_con_candado
 @_con_candado
 def obtener_posiciones_abiertas(simbolo=SIMBOLO):
     # simbolo=None -> trae TODAS las posiciones abiertas, sin filtrar por símbolo
     # (usado por los comandos de Telegram, que operan sobre cualquier activo).
     posiciones = mt5.positions_get() if simbolo is None else mt5.positions_get(symbol=simbolo)
     if posiciones is None:
-        return []
+        raise RuntimeError(
+            "MT5 no pudo consultar las posiciones abiertas: %s" % (mt5.last_error(),)
+        )
     resultado = []
     for p in posiciones:
+        sl = p.sl if isinstance(p.sl, (int, float)) and p.sl > 0 else None
+        tp = p.tp if isinstance(p.tp, (int, float)) and p.tp > 0 else None
         resultado.append({
             "ticket": p.ticket,
             "simbolo": p.symbol,
@@ -268,8 +369,8 @@ def obtener_posiciones_abiertas(simbolo=SIMBOLO):
             "precio_apertura": p.price_open,
             "precio_actual": p.price_current,
             "profit": p.profit,
-            "sl": p.sl,
-            "tp": p.tp,
+            "sl": sl,
+            "tp": tp,
             "hora_apertura": p.time,
             "comment": p.comment,
         })
@@ -338,7 +439,7 @@ def obtener_comentario_entrada(position_id):
 @_con_candado
 def enviar_orden_manual(tipo, volumen, simbolo=SIMBOLO, sl=0.0, tp=0.0,
                         tipo_orden="mercado", precio_entrada=0.0, spread_maximo_puntos=0.0,
-                        comment=None):
+                        comment=None, origen="bot"):
     """Envía una orden de mercado o pendiente límite.
     spread_maximo_puntos: si es > 0, rechaza la orden sin enviarla cuando el
     spread actual (ask-bid, en "puntos" del símbolo) lo supera. En 0 (default)
@@ -350,6 +451,15 @@ def enviar_orden_manual(tipo, volumen, simbolo=SIMBOLO, sl=0.0, tp=0.0,
         return {"ok": False, "error": "Tipo de orden no válido"}
     if float(volumen) <= 0:
         return {"ok": False, "error": "El volumen debe ser mayor que cero"}
+
+    # Guardia de riesgo: kill switch, perdida diaria, limites y duplicados. Es el unico
+    # punto por donde salen TODAS las entradas (escaner, estrategia y manuales).
+    # origen="manual" solo lo usa /api/orden; las manuales solo respetan el kill switch.
+    from ..operaciones.guardia_riesgo import revisar_orden
+    bloqueo = revisar_orden(tipo, volumen, simbolo, sl=sl, tp=tp, origen=origen,
+                            tipo_orden=tipo_orden, comentario=comment)
+    if bloqueo:
+        return bloqueo
 
     info_simbolo = mt5.symbol_info(simbolo)
     if info_simbolo is None:
@@ -488,6 +598,56 @@ def enviar_orden_manual(tipo, volumen, simbolo=SIMBOLO, sl=0.0, tp=0.0,
     return ultimo_resultado or {"ok": False, "error": "No se pudo enviar la orden con ningún modo de llenado"}
 
 
+def _revisar_sl_be(posicion, nuevo_sl, cache_info):
+    """Valida ANTES de enviar si el bróker aceptará el SL pedido (típicamente el
+    breakeven). Devuelve (sl_redondeado, error|None).
+
+    Motivo: con el precio apenas por encima de la entrada, SL = precio de
+    apertura queda a menos de SYMBOL_TRADE_STOPS_LEVEL del precio y MT5
+    responde 10016 (Invalid stops). Antes eso solo aparecía como un
+    «Retcode 10016» genérico y parecía que el BE «no se ponía». Ahora se
+    explica con números y no se pierde tiempo mandando una orden inútil.
+    Si algo no se puede consultar (símbolo sin info, tick vacío) NO bloquea:
+    se deja que el bróker decida."""
+    sl = float(nuevo_sl)
+    simbolo = getattr(posicion, "symbol", None)
+    if not simbolo:
+        return sl, None
+    try:
+        if simbolo not in cache_info:
+            cache_info[simbolo] = (mt5.symbol_info(simbolo), mt5.symbol_info_tick(simbolo))
+        info, tick = cache_info[simbolo]
+        if info is None or tick is None or not getattr(info, "point", 0):
+            return sl, None
+        sl = round(sl, int(info.digits))
+        es_compra = getattr(posicion, "type", 0) == mt5.POSITION_TYPE_BUY
+        # compra: el SL cierra al BID; venta: cierra al ASK.
+        distancia = (tick.bid - sl) if es_compra else (sl - tick.ask)
+        minimo = max(
+            getattr(info, "trade_stops_level", 0) or 0,
+            getattr(info, "trade_freeze_level", 0) or 0,
+        ) * info.point
+        if distancia <= 0:
+            return sl, {
+                "ok": False,
+                "error": "Sin ganancia suficiente: el precio actual no está del lado favorable del BE.",
+                "retcode": 10016,
+            }
+        if minimo > 0 and distancia < minimo:
+            return sl, {
+                "ok": False,
+                "error": (
+                    f"Muy cerca para BE: el precio está a {distancia:.{info.digits}f} "
+                    f"de la entrada y el bróker exige mínimo {minimo:.{info.digits}f}. "
+                    "Se podrá cuando el precio avance un poco más."
+                ),
+                "retcode": 10016,
+            }
+        return sl, None
+    except Exception:
+        return sl, None
+
+
 @_con_candado
 def modificar_sl(ticket, nuevo_sl):
     """Mueve el SL de una posición ya abierta (usado para pasar a breakeven).
@@ -497,11 +657,14 @@ def modificar_sl(ticket, nuevo_sl):
         return {"ok": False, "error": "Posición no encontrada"}
 
     p = posiciones[0]
+    sl, error = _revisar_sl_be(p, nuevo_sl, {})
+    if error:
+        return error
     solicitud = {
         "action": mt5.TRADE_ACTION_SLTP,
         "symbol": p.symbol,
         "position": ticket,
-        "sl": float(nuevo_sl),
+        "sl": sl,
         "tp": p.tp,
     }
     resultado = mt5.order_send(solicitud)
@@ -512,6 +675,76 @@ def modificar_sl(ticket, nuevo_sl):
     if resultado.retcode != mt5.TRADE_RETCODE_DONE:
         return _error_orden(resultado)
     return {"ok": True}
+
+
+@_con_candado
+def modificar_sl_masivo(posiciones):
+    """Mueve varios SL consultando las posiciones abiertas una sola vez y
+    validando el stops-level por símbolo (una sola consulta por símbolo)."""
+    abiertas = mt5.positions_get()
+    if abiertas is None:
+        error = str(mt5.last_error())
+        return {
+            p["ticket"]: {"ok": False, "error": error}
+            for p in posiciones
+        }
+
+    por_ticket = {p.ticket: p for p in abiertas}
+    resultados = {}
+    cache_info = {}
+    # 10024 = demasiadas solicitudes, 10028 = bloqueado (valores fijos de MT5).
+    transitorios = {10024, 10028}
+    bloqueo_global = None
+    for objetivo in posiciones:
+        ticket = objetivo["ticket"]
+        posicion = por_ticket.get(ticket)
+        if posicion is None:
+            resultados[ticket] = {"ok": False, "error": "Posición no encontrada"}
+            continue
+
+        if bloqueo_global:
+            # El servidor/terminal ya rechazó el trading automático: insistir con
+            # el resto solo hace más lento el resumen y no puede funcionar.
+            resultados[ticket] = bloqueo_global
+            continue
+
+        sl, error = _revisar_sl_be(posicion, objetivo["precio_apertura"], cache_info)
+        if error:
+            resultados[ticket] = error
+            continue
+
+        solicitud = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": posicion.symbol,
+            "position": ticket,
+            "sl": sl,
+            "tp": posicion.tp,
+        }
+        for intento in range(4):
+            try:
+                resultado = mt5.order_send(solicitud)
+            except Exception as error_envio:
+                resultados[ticket] = {"ok": False, "error": str(error_envio)}
+                break
+            if resultado is None:
+                resultados[ticket] = {"ok": False, "error": str(mt5.last_error())}
+                break
+            if resultado.retcode in (10026, 10027):
+                bloqueo = _error_orden(resultado)
+                resultados[ticket] = bloqueo
+                bloqueo_global = bloqueo
+                break
+            if resultado.retcode in transitorios and intento < 3:
+                time.sleep(0.5 * (intento + 1))
+                continue
+            if resultado.retcode == 10025:
+                resultados[ticket] = {"ok": True, "sin_cambios": True}
+            elif resultado.retcode != mt5.TRADE_RETCODE_DONE:
+                resultados[ticket] = _error_orden(resultado)
+            else:
+                resultados[ticket] = {"ok": True}
+            break
+    return resultados
 
 
 @_con_candado
@@ -571,6 +804,153 @@ def cerrar_posicion(ticket):
         return _error_orden(resultado)
 
     return {"ok": True}
+
+
+@_con_candado
+def gestionar_posiciones(simbolo, tipo, accion, colchon_puntos=0):
+    """Apply a confirmed manual action to one symbol and one position side."""
+    if not simbolo or tipo not in ("compra", "venta"):
+        return {"ok": False, "error": "Selecciona un símbolo y BUY o SELL."}
+    if accion not in ("cerrar", "mover_sl"):
+        return {"ok": False, "error": "La acción grupal no es válida."}
+
+    posiciones = mt5.positions_get(symbol=simbolo)
+    if posiciones is None:
+        return {"ok": False, "error": str(mt5.last_error())}
+
+    tipo_mt5 = mt5.POSITION_TYPE_BUY if tipo == "compra" else mt5.POSITION_TYPE_SELL
+    posiciones_filtradas = [
+        p for p in posiciones
+        if p.symbol == simbolo and p.type == tipo_mt5
+    ]
+    if not posiciones_filtradas:
+        return {
+            "ok": False,
+            "error": f"No hay posiciones {tipo.upper()} abiertas en {simbolo}.",
+            "total": 0,
+            "exitosas": [],
+            "omitidas": [],
+            "fallidas": [],
+        }
+
+    exitosas = []
+    omitidas = []
+    fallidas = []
+
+    if accion == "mover_sl":
+        try:
+            colchon_puntos = float(colchon_puntos)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "El colchón debe ser un número mayor que cero."}
+        if not math.isfinite(colchon_puntos) or colchon_puntos <= 0:
+            return {"ok": False, "error": "El colchón debe ser un número mayor que cero."}
+
+        informacion = mt5.symbol_info(simbolo)
+        if informacion is None or informacion.point <= 0:
+            return {
+                "ok": False,
+                "error": f"No se pudo obtener el tamaño de punto para {simbolo}: "
+                f"{mt5.last_error()}",
+            }
+
+        distancia_minima = max(
+            getattr(informacion, "trade_stops_level", 0) or 0,
+            getattr(informacion, "trade_freeze_level", 0) or 0,
+        ) * informacion.point
+
+    for posicion in posiciones_filtradas:
+        try:
+            posiciones_actuales = mt5.positions_get(ticket=posicion.ticket)
+            if posiciones_actuales is None:
+                fallidas.append({
+                    "ticket": posicion.ticket,
+                    "error": str(mt5.last_error()),
+                })
+                continue
+            if not posiciones_actuales:
+                omitidas.append({
+                    "ticket": posicion.ticket,
+                    "motivo": "La posición ya no está abierta.",
+                })
+                continue
+            posicion_actual = posiciones_actuales[0]
+            if (
+                posicion_actual.symbol != simbolo
+                or posicion_actual.type != tipo_mt5
+            ):
+                omitidas.append({
+                    "ticket": posicion.ticket,
+                    "motivo": "La posición ya no coincide con símbolo y dirección seleccionados.",
+                })
+                continue
+
+            if accion == "cerrar":
+                resultado = cerrar_posicion(posicion_actual.ticket)
+                precio_sl = None
+            else:
+                tick = mt5.symbol_info_tick(simbolo)
+                if tick is None:
+                    fallidas.append({
+                        "ticket": posicion.ticket,
+                        "error": str(mt5.last_error()),
+                    })
+                    continue
+                es_compra = tipo == "compra"
+                precio_sl = round(
+                    posicion_actual.price_open
+                    + (1 if es_compra else -1) * colchon_puntos * informacion.point,
+                    informacion.digits,
+                )
+                precio_actual = tick.bid if es_compra else tick.ask
+                precio_valido = (
+                    precio_sl < precio_actual - distancia_minima
+                    if es_compra
+                    else precio_sl > precio_actual + distancia_minima
+                )
+                if not precio_valido:
+                    omitidas.append({
+                        "ticket": posicion.ticket,
+                        "motivo": "El precio actual no permite colocar el SL con ese colchón.",
+                    })
+                    continue
+
+                sl_actual = posicion_actual.sl or 0
+                mejora_sl = (
+                    sl_actual <= 0 or precio_sl > sl_actual
+                    if es_compra
+                    else sl_actual <= 0 or precio_sl < sl_actual
+                )
+                if not mejora_sl:
+                    omitidas.append({
+                        "ticket": posicion.ticket,
+                        "motivo": "El SL actual ya protege igual o mejor; no se modificó.",
+                    })
+                    continue
+                resultado = modificar_sl(posicion_actual.ticket, precio_sl)
+
+            if resultado.get("ok"):
+                item = {"ticket": posicion.ticket}
+                if precio_sl is not None:
+                    item["sl"] = precio_sl
+                exitosas.append(item)
+            else:
+                fallidas.append({
+                    "ticket": posicion.ticket,
+                    "error": resultado.get("error", "MT5 rechazó la operación."),
+                })
+        except Exception as exc:
+            fallidas.append({"ticket": posicion.ticket, "error": str(exc)})
+
+    return {
+        "ok": bool(exitosas) and not fallidas,
+        "accion": accion,
+        "simbolo": simbolo,
+        "tipo": tipo,
+        "total": len(posiciones_filtradas),
+        "exitosas": exitosas,
+        "omitidas": omitidas,
+        "fallidas": fallidas,
+    }
 
 
 @_con_candado
@@ -659,3 +1039,37 @@ def obtener_tamano_contrato(simbolo=SIMBOLO):
     if info is None or not getattr(info, "trade_contract_size", None):
         return 100.0  # valor típico de respaldo (ej. onzas por lote en oro)
     return float(info.trade_contract_size)
+
+
+@_con_candado
+def obtener_datos_lote_backtest(simbolo=SIMBOLO):
+    """Devuelve el valor por unidad de precio y los límites de lote para una simulación."""
+    info = mt5.symbol_info(simbolo)
+    if info is None:
+        return None
+    tick_size = float(getattr(info, "trade_tick_size", 0) or 0)
+    tick_value = float(getattr(info, "trade_tick_value_loss", 0) or getattr(info, "trade_tick_value", 0) or 0)
+    contract_size = float(getattr(info, "trade_contract_size", 0) or 0)
+    valor_por_unidad = tick_value / tick_size if tick_size > 0 and tick_value > 0 else contract_size
+    if valor_por_unidad <= 0:
+        return None
+    return {
+        "valor_por_unidad": valor_por_unidad,
+        "paso": float(getattr(info, "volume_step", 0.01) or 0.01),
+        "minimo": float(getattr(info, "volume_min", 0.01) or 0.01),
+        "maximo": float(getattr(info, "volume_max", 100.0) or 100.0),
+    }
+
+
+@_con_candado
+def obtener_limites_volumen(simbolo=SIMBOLO):
+    """Mínimo, máximo y paso de volumen que permite el broker para este símbolo.
+    Se usa para no mandar un lotaje calculado que MT5 vaya a rechazar."""
+    info = mt5.symbol_info(simbolo)
+    if info is None:
+        return {"minimo": 0.01, "maximo": 100.0, "paso": 0.01}
+    return {
+        "minimo": float(getattr(info, "volume_min", 0.01) or 0.01),
+        "maximo": float(getattr(info, "volume_max", 100.0) or 100.0),
+        "paso": float(getattr(info, "volume_step", 0.01) or 0.01),
+    }

@@ -1,16 +1,30 @@
 import { StatusBar } from 'expo-status-bar';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, useWindowDimensions, Text, TextInput, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { z } from 'zod';
+import { PanelAnalista, ListaActivos } from './src/PanelAnalista';
+import { GraficoVivo, GraficoReplay, type LentesReplayGv } from './src/GraficoVivo';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000');
+const API_URL = process.env.EXPO_PUBLIC_API_URL ?? (Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000');
 // Debe ser el mismo valor que API_KEY en el .env del backend. Se mete como
 // variable de build (EXPO_PUBLIC_API_KEY) para no dejar el token hardcodeado
 // en el repo.
 const API_KEY = process.env.EXPO_PUBLIC_API_KEY || '';
-const BACKTEST_TIMEFRAMES = ['M1', 'M5', 'M15', 'H1'] as const;
+type AppTab = 'mercado' | 'vivo' | 'proyecciones' | 'estrategia' | 'operar' | 'riesgo' | 'historial' | 'fundamentales' | 'backtesting' | 'telegram';
+const NAV_ITEMS: { key: AppTab; label: string; short: string }[] = [
+  { key: 'mercado', label: 'Resumen', short: 'IN' },
+  { key: 'vivo', label: 'En vivo', short: 'TV' },
+  { key: 'proyecciones', label: 'Proyecciones', short: 'PX' },
+  { key: 'estrategia', label: 'Estrategia', short: 'ES' },
+  { key: 'operar', label: 'Operar', short: 'OP' },
+  { key: 'riesgo', label: 'Riesgo', short: 'RG' },
+  { key: 'historial', label: 'Historial', short: 'HI' },
+  { key: 'fundamentales', label: 'Calendario', short: 'CA' },
+  { key: 'backtesting', label: 'Backtesting', short: 'BT' },
+  { key: 'telegram', label: 'Telegram', short: 'TG' },
+];
 // Mismo mapeo que TEMPORALIDADES en backend/estructura.py — se muestra en el
 // panel para que quede claro qué temporalidad escrita cae en cada grupo.
 const GRUPO_TEMPORALIDAD: Record<string, 'micro' | 'intermedia' | 'macro' | 'extra_macro'> = {
@@ -67,6 +81,38 @@ const ContextoEstructuraSchema = z.object({
     sesgo_menor: z.string(),
   })),
 }).nullable().optional();
+type ConflictoTemporalidad = {
+  mayor: string;
+  sesgo_mayor: string;
+  menor: string;
+  sesgo_menor: string;
+};
+function agruparConflictos(conflictos: ConflictoTemporalidad[]) {
+  const grupos = new Map<string, {
+    mayor: string;
+    sesgo_mayor: string;
+    sesgo_menor: string;
+    menores: Set<string>;
+  }>();
+  for (const conflicto of conflictos) {
+    const clave = JSON.stringify([conflicto.mayor, conflicto.sesgo_mayor, conflicto.sesgo_menor]);
+    let grupo = grupos.get(clave);
+    if (!grupo) {
+      grupo = {
+        mayor: conflicto.mayor,
+        sesgo_mayor: conflicto.sesgo_mayor,
+        sesgo_menor: conflicto.sesgo_menor,
+        menores: new Set<string>(),
+      };
+      grupos.set(clave, grupo);
+    }
+    grupo.menores.add(conflicto.menor);
+  }
+  return Array.from(grupos.values()).map(({ menores, ...grupo }) => ({
+    ...grupo,
+    menores: Array.from(menores),
+  }));
+}
 const UltimaOrdenSchema = z.object({ ok: z.boolean().optional(), ticket: z.number().optional(), precio: z.number().optional(), error: z.string().optional() }).nullable().optional();
 const StateSchema = z.object({
   conectado: z.boolean(),
@@ -81,9 +127,82 @@ const StateSchema = z.object({
   circuito_disparado: z.boolean().optional(),
   config: z.object({ simbolo: z.string(), simbolos_permitidos: z.array(z.string()).optional(), activo: z.boolean(), estrategia: z.string().nullable().optional(), estrategia_biblioteca_activa: z.string().nullable().optional(), timeframe_entrada: z.string().optional(), timeframe_macro: z.string().optional(), volumen_operacion: z.number().optional(), circuito_perdida_diaria_activo: z.boolean().optional(), circuito_perdida_diaria_pct: z.number().optional(), spread_maximo_puntos: z.number().optional(), max_operaciones_por_simbolo: z.number().optional(), filtro_sesgo_macro: z.boolean().optional(), aviso_cambio_direccion: z.boolean().optional(), proteger_cambio_direccion: z.boolean().optional(), noticia_be_activo: z.boolean().optional(), bloqueo_noticias_activo: z.boolean().optional(), be_activo: z.boolean().optional(), be_porcentaje: z.number().optional(), be_cascada_buffer_pct: z.number().optional(), be_dinamico_activo: z.boolean().optional(), be_dinamico_fibo_nivel: z.number().optional(), grupos_temporalidad: z.record(z.string(), z.string()).optional(), temporalidades_escaneo: z.array(z.string()).optional(), parametros: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())])).optional() }).optional(),
 });
+const AnalistaWatchlistSchema = z.object({
+  simbolos: z.array(z.string()),
+  operar: z.array(z.string()),
+  ejecucion_activa: z.boolean(),
+});
+const ProyeccionAnalistaSchema = z.object({
+  simbolo: z.string(),
+  direccion: z.enum(['alcista', 'bajista', 'acumulacion']),
+  estado: z.string(),
+  zona: z.string(),
+  zona_tf: z.string(),
+  zona_rango: z.tuple([z.number(), z.number()]),
+  fuerza_rompimiento: z.string(),
+  entrada: z.number(),
+  sl: z.number(),
+  operaciones: z.array(z.object({
+    nombre: z.string(),
+    tp: z.number(),
+    peso: z.number(),
+    rr: z.number(),
+  }).passthrough()),
+  score: z.number(),
+  confluencias: z.array(z.string()),
+  notas: z.array(z.string()),
+  alineacion: z.number(),
+  clave: z.string(),
+  ejecutada: z.boolean().optional(),
+  en_curso: z.boolean().optional(),
+  lotes: z.array(z.object({ operacion: z.string(), lote: z.number(), riesgo: z.number() })),
+}).passthrough();
+const ProyeccionesSchema = z.object({
+  escaner: z.object({
+    corriendo: z.boolean(),
+    ultima: z.string().nullable(),
+    hace_min: z.number().nullable(),
+    intervalo_min: z.number(),
+  }),
+  ejecucion_activa: z.boolean(),
+  todas_las_proyecciones: z.boolean().optional(),
+  mt5_conectado: z.boolean(),
+  cuenta_real: z.boolean(),
+  moneda: z.string().nullable(),
+  manual_permitido: z.boolean(),
+  activos: z.array(z.object({
+    simbolo: z.string(),
+    mt5: z.string(),
+    marcado_operar: z.boolean(),
+    estado: z.string(),
+    detalle: z.string(),
+    escenarios: z.array(ProyeccionAnalistaSchema),
+    posiciones: z.array(z.object({
+      ticket: z.number(),
+      tipo: z.string(),
+      volumen: z.number(),
+      precio_apertura: z.number(),
+      precio_actual: z.number(),
+      profit: z.number(),
+      sl: z.number().nullable(),
+      tp: z.number().nullable(),
+    }).passthrough()),
+  })),
+});
 const AccountSchema = z.object({ cuenta: z.number(), servidor: z.string(), balance: z.number(), equity: z.number(), profit: z.number(), apalancamiento: z.number(), moneda: z.string(), es_real: z.boolean() });
 const AccountResponseSchema = z.union([AccountSchema, z.object({ error: z.string() })]);
 const PositionSchema = z.object({ ticket: z.number(), simbolo: z.string(), tipo: z.string(), volumen: z.number(), precio_apertura: z.number(), precio_actual: z.number(), profit: z.number(), hora_apertura: z.number().optional() });
+const BulkActionResultSchema = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  accion: z.string().optional(),
+  simbolo: z.string().optional(),
+  tipo: z.string().optional(),
+  total: z.number().optional(),
+  exitosas: z.array(z.object({ ticket: z.number(), sl: z.number().optional() })).optional(),
+  omitidas: z.array(z.object({ ticket: z.number(), motivo: z.string() })).optional(),
+  fallidas: z.array(z.object({ ticket: z.number(), error: z.string() })).optional(),
+});
 
 // Formatea un timestamp (epoch en segundos) a hora local del dispositivo en
 // formato 12 horas (AM/PM), sin importar el idioma/región del teléfono.
@@ -109,9 +228,24 @@ const FundamentalEventoSchema = z.object({ title: z.string(), country: z.string(
 const FundamentalesSchema = z.object({ pendientes: z.array(FundamentalEventoSchema), en_proceso: z.array(FundamentalEventoSchema), pasados: z.array(FundamentalEventoSchema) });
 
 // --- Backtesting ---
-const TradeSchema = z.object({ tipo: z.string(), entrada: z.number(), sl: z.number(), tp: z.number(), salida: z.number(), volumen: z.number(), profit: z.number(), hora_apertura: z.string(), hora_cierre: z.string(), motivo_cierre: z.enum(['sl', 'tp', 'be']).optional(), be_aplicado: z.boolean().optional() });
+const TradeSchema = z.object({ tipo: z.string(), entrada: z.number(), sl: z.number(), tp: z.number(), salida: z.number(), volumen: z.number(), profit: z.number(), hora_apertura: z.string(), hora_cierre: z.string(), motivo_cierre: z.enum(['sl', 'tp', 'be']).optional(), be_aplicado: z.boolean().optional(), riesgo_objetivo: z.number().optional(), riesgo_real: z.number().optional() });
 const EquityPointSchema = z.object({ tiempo: z.string(), balance: z.number() });
 const VelaReplaySchema = z.object({ time: z.number(), open: z.number(), high: z.number(), low: z.number(), close: z.number() });
+const PasoEstrategiaSchema = z.object({
+  time: z.number(),
+  tipo: z.string(),
+  texto: z.string(),
+  escenario_id: z.string().nullable().optional(),
+  activo: z.boolean().optional(),
+  zona: z.string().nullable().optional(),
+  zona_tf: z.string().nullable().optional(),
+  zona_rango: z.array(z.number()).optional(),
+  entrada: z.number().nullable().optional(),
+  sl: z.number().nullable().optional(),
+  tp: z.number().nullable().optional(),
+  direccion: z.string().nullable().optional(),
+  estado: z.string().nullable().optional(),
+});
 const BacktestDiagnosticSchema = z.object({
   estrategia_activa: z.string(),
   tipo_estrategia: z.string(),
@@ -128,6 +262,34 @@ const ReplayVelasResponseSchema = z.union([
   z.object({ timeframe: z.string(), velas: z.array(VelaReplaySchema) }),
   z.object({ error: z.string() }),
 ]);
+const LentesReplaySchema: z.ZodType<LentesReplayGv> = z.object({
+  lentes: z.array(z.object({
+    nombre: z.string(),
+    vista: z.string(),
+    estructura: z.string(),
+    direccion: z.string(),
+    direccion_vista: z.string(),
+    fase: z.string(),
+    pivotes: z.array(z.object({
+      time: z.number(),
+      confirmacion: z.number().optional(),
+      precio: z.number(),
+      tipo: z.enum(['high', 'low']),
+      clase: z.string(),
+    })),
+    quiebres: z.array(z.object({
+      time: z.number(),
+      precio: z.number(),
+      direccion: z.string(),
+      tipo: z.enum(['BOS', 'CHOCH']),
+    })),
+  })),
+  zonas: z.array(z.object({
+    estructura: z.string(), tipo: z.string(), direccion: z.string(), estado: z.string(),
+    rango: z.tuple([z.number(), z.number()]),
+  })),
+  temporalidades_faltantes: z.array(z.string()),
+});
 const BacktestResultSchema = z.union([
   z.object({
     balance_inicial: z.number(),
@@ -137,6 +299,7 @@ const BacktestResultSchema = z.union([
     total_operaciones: z.number(),
     ganadoras: z.number(),
     perdedoras: z.number(),
+    neutras: z.number().optional(),
     tasa_acierto: z.number(),
     max_drawdown: z.number(),
     posicion_abierta_al_final: z.object({
@@ -147,8 +310,27 @@ const BacktestResultSchema = z.union([
       volumen: z.number(),
       hora_apertura: z.string(),
       be_aplicado: z.boolean().optional(),
+      profit_flotante: z.number().optional(),
+      riesgo_objetivo: z.number().optional(),
+      riesgo_real: z.number().optional(),
+      riesgo_actual: z.number().optional(),
     }).nullable().optional(),
+    posiciones_abiertas: z.array(z.object({
+      tipo: z.string(),
+      entrada: z.number(),
+      sl: z.number(),
+      tp: z.number(),
+      volumen: z.number(),
+      hora_apertura: z.string(),
+      be_aplicado: z.boolean().optional(),
+      profit_flotante: z.number(),
+      riesgo_objetivo: z.number(),
+      riesgo_real: z.number(),
+      riesgo_actual: z.number(),
+    })).optional(),
+    valor_por_unidad_lote: z.number().optional(),
     operaciones: z.array(TradeSchema),
+    pasos_estrategia: z.array(PasoEstrategiaSchema).optional(),
     curva_equity: z.array(EquityPointSchema),
     simbolo: z.string(),
     desde: z.string(),
@@ -158,11 +340,13 @@ const BacktestResultSchema = z.union([
     indice_inicio_replay: z.number().optional(),
     timeframe_entrada: z.string().nullable().optional(),
     timeframe_macro: z.string().nullable().optional(),
+    aviso: z.string().nullable().optional(),
     diagnostico: BacktestDiagnosticSchema.optional(),
   }),
   z.object({ error: z.string() }),
 ]);
 const BacktestStartSchema = z.object({ job_id: z.string() });
+const BacktestDateRangeSchema = z.object({ desde: z.string().nullable(), hasta: z.string().nullable() });
 const BacktestProgresoSchema = z.object({
   listo: z.boolean(),
   procesado: z.number(),
@@ -223,7 +407,7 @@ function contratoDe(simbolo: string): number {
   return 100000;
 }
 
-function construirHtmlReplay(velas: VelaReplay[], operaciones: { tipo: string; entrada: number; sl: number; tp: number; salida: number; profit: number; hora_apertura: string; hora_cierre: string; motivo_cierre?: 'sl' | 'tp' | 'be'; be_aplicado?: boolean; volumen?: number }[], contrato: number, estadoInicial: string): string {
+function construirHtmlReplay(velas: VelaReplay[], operaciones: { tipo: string; entrada: number; sl: number; tp: number; salida: number; profit: number; hora_apertura: string; hora_cierre: string; motivo_cierre?: 'sl' | 'tp' | 'be'; be_aplicado?: boolean; volumen?: number }[], pasosEstrategia: z.infer<typeof PasoEstrategiaSchema>[], contrato: number, estadoInicial: string): string {
   const ops = operaciones.map((op) => ({
     tipo: op.tipo,
     entrada: op.entrada,
@@ -239,6 +423,7 @@ function construirHtmlReplay(velas: VelaReplay[], operaciones: { tipo: string; e
   // El estado manual (dibujos + operaciones tomadas a mano) se guarda en epoch/precio,
   // así sobrevive al cambio de temporalidad (que recarga el iframe).
   const estadoSeguro = (estadoInicial || '{}').replace(/</g, '\\u003c');
+  const pasosSeguros = JSON.stringify(pasosEstrategia).replace(/</g, '\\u003c');
   return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <style>
@@ -256,6 +441,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
 #tools button{min-width:30px;height:28px;padding:0 5px;border:1px solid #33404d;border-radius:5px;background:#1d2530;color:#dce2e8;font-size:13px;cursor:pointer;}
 #tools button.on{background:#b88b35;color:#0b0f14;border-color:#b88b35;}
 #sep{width:1px;background:#33404d;margin:0 2px;}
+#tz{position:absolute;right:0;bottom:0;z-index:15;box-sizing:border-box;background:#0b0f14;color:#dce2e8;border:0;border-left:1px solid #222c37;font-size:11px;padding:0 2px;cursor:pointer;}
 #trade{right:68px;top:6px;padding:6px;width:236px;max-height:calc(100% - 90px);overflow-y:auto;}
 #trade.mini{width:auto;overflow:visible;}
 #tHead{display:flex;align-items:center;gap:4px;}
@@ -279,6 +465,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
 #dBar button{border:1px solid #33404d;background:#1d2530;color:#dce2e8;border-radius:5px;font-size:11px;padding:3px 8px;cursor:pointer;}
 #dBar button.on{background:#b88b35;color:#0b0f14;border-color:#b88b35;}
 #dBody{overflow:auto;border-top:1px solid #26303b;}
+#drawer.max{top:6px;left:6px;right:6px;bottom:6px;max-height:none;z-index:40;background:rgba(15,20,27,.98);}
+#drawer.max #dBody{flex:1;}
+#drawer.max #tbl{font-size:13px;}
+#drawer.max #tbl td,#drawer.max #tbl th{padding:6px 10px;}
 #dBody.oculto{display:none;}
 #tbl{width:100%;border-collapse:collapse;font-size:11px;}
 #tbl th{position:sticky;top:0;background:#151b23;color:#8893a0;text-align:left;padding:3px 6px;font-weight:600;}
@@ -289,6 +479,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
 <div id="wrap">
 <div id="chart"></div>
 <canvas id="cv"></canvas>
+<select id="tz" title="Horario del eje: desplazamiento respecto a la hora del servidor MT5"></select>
 <div id="tools" class="panel">
   <span class="grip keep" id="gTools" title="Arrastra para mover">&#8942;&#8942;</span>
   <button id="tMin" class="keep" title="Minimizar / expandir herramientas">&#8211;</button>
@@ -299,11 +490,15 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   <button data-m="rect" title="Rectangulo">&#9645;</button>
   <button data-m="fib" title="Fibonacci">Fib</button>
   <button data-m="medir" title="Medir">&#128207;</button>
+  <button data-m="poli" title="Polilinea: toca varios puntos; doble toque o Enter para terminar">Poli</button>
+  <button data-m="ruta" title="Ruta con flecha: toca varios puntos; doble toque o Enter para terminar">Ruta</button>
   <div id="sep"></div>
   <button id="bColor" title="Color">&#9679;</button>
   <button id="bUndo" title="Deshacer ultimo dibujo">&#8630;</button>
   <button id="bDel" title="Borrar el dibujo seleccionado">&#128465;</button>
   <button id="bClear" title="Borrar todos los dibujos">&#10005;</button>
+  <button id="bTipo" title="Cambiar entre velas y grafico lineal">Linea</button>
+  <button id="bBot" class="keep" title="Operaciones del bot en el grafico: todo / solo marcas / ocultas">Bot</button>
 </div>
 <div id="trade" class="panel">
   <div id="tHead"><span class="grip" id="gTrade" title="Arrastra para mover">&#8942;&#8942;</span><button id="bTog" title="Minimizar / expandir">&#9662; Operar</button></div>
@@ -325,6 +520,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     <button id="dTog">&#9652; Operaciones</button>
     <button data-tab="ab" class="on">Abiertas</button>
     <button data-tab="hi">Historial</button>
+    <button id="dTodo" title="Mostrar todas las operaciones (sin el limite de 40)">Ver todo</button>
+    <button id="dMax" title="Agrandar la tabla a toda la pantalla (Esc para volver)">&#9974; Pantalla completa</button>
     <span id="dRes"></span>
   </div>
   <div id="dBody" class="oculto"></div>
@@ -336,6 +533,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
 (function () {
   var TODAS_VELAS = ${JSON.stringify(velas)};
   var TODAS_OPS = ${JSON.stringify(ops)};
+  var PASOS_ESTRATEGIA = ${pasosSeguros};
   var ESTADO_INICIAL = ${estadoSeguro};
   var CONTRATO = ${contrato};
   var V = TODAS_VELAS;
@@ -353,8 +551,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   var DEC = refPrecio > 500 ? 2 : (refPrecio > 50 ? 3 : 5);
   function fmt(p) { return Number(p).toFixed(DEC); }
   function sg(x) { return (x >= 0 ? '+' : '') + x.toFixed(2); }
+  var TZ = (Number(cfg.tz) || 0) * 3600; // replay2-v1
   if (!cfg.lote) cfg.lote = 0.01;
   if (!cfg.color) cfg.color = COLORES[0];
+  if (cfg.toolsMin === undefined) cfg.toolsMin = true; // replay-limpio
   if (!cfg.sl) cfg.sl = Number((refPrecio * 0.001).toFixed(DEC));
   if (!cfg.tp) cfg.tp = Number((refPrecio * 0.002).toFixed(DEC));
 
@@ -375,8 +575,9 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   // ---------- grafico ----------
   var chart = LightweightCharts.createChart(document.getElementById('chart'), {
     layout: { background: { color: '#0b0f14' }, textColor: '#d1d8e0' },
-    grid: { vertLines: { color: '#1a2129' }, horzLines: { color: '#1a2129' } },
-    timeScale: { timeVisible: true, secondsVisible: false },
+    grid: { vertLines: { color: '#0f151b' }, horzLines: { color: '#0f151b' } },
+    rightPriceScale: { borderColor: '#222c37' },
+    timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#222c37' },
     width: window.innerWidth,
     height: window.innerHeight,
   });
@@ -384,8 +585,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
     wickUpColor: '#22c55e', wickDownColor: '#ef4444',
   });
+  var serieL = chart.addLineSeries({ color: '#38bdf8', lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, visible: false });
   var lineasOperacion = [];
   var lineasManual = [];
+  var lineasEstrategia = [];
 
   function limpiarLineasOperacion() {
     for (var k = 0; k < lineasOperacion.length; k++) serie.removePriceLine(lineasOperacion[k]);
@@ -398,6 +601,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   function lineaManual(precio, color, texto, estilo) {
     if (!precio) return;
     lineasManual.push(serie.createPriceLine({ price: precio, color: color, lineWidth: 1, lineStyle: estilo || 0, axisLabelVisible: true, title: texto }));
+  }
+  function lineaEstrategia(precio, color, texto) {
+    if (precio === null || precio === undefined || !Number.isFinite(Number(precio))) return;
+    lineasEstrategia.push(serie.createPriceLine({ price: Number(precio), color: color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: texto }));
   }
 
   // ---------- tiempo <-> indice logico (permite dibujar hacia el futuro) ----------
@@ -498,7 +705,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   function esBot(tr) { return tr.origen === 'bot'; }
   function dosd(x) { return (x < 10 ? '0' : '') + x; }
   function hora(t) {
-    var d = new Date(t * 1000);
+    var d = new Date((t + TZ) * 1000);
     return d.getUTCFullYear() + '.' + dosd(d.getUTCMonth() + 1) + '.' + dosd(d.getUTCDate()) + ' ' + dosd(d.getUTCHours()) + ':' + dosd(d.getUTCMinutes());
   }
 
@@ -616,22 +823,82 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
       var tiempoEntrada = tiempoDeVelaAnterior(op.aperturaEpoch);
       var tiempoSalida = tiempoDeVelaAnterior(op.cierreEpoch);
       if (tiempoEntrada !== null && tiempoEntrada <= tiempoActual) {
-        marcadores.push({ time: tiempoEntrada, position: 'belowBar', color: op.tipo === 'compra' ? '#22c55e' : '#ef4444', shape: op.tipo === 'compra' ? 'arrowUp' : 'arrowDown', text: op.tipo === 'compra' ? 'COMPRA' : 'VENTA' });
+        marcadores.push({ time: tiempoEntrada, position: 'belowBar', color: op.tipo === 'compra' ? '#22c55e' : '#ef4444', shape: op.tipo === 'compra' ? 'arrowUp' : 'arrowDown', text: '' });
       }
       if (tiempoSalida !== null && tiempoSalida <= tiempoActual) {
         var colorCierre = op.motivoCierre === 'tp' || (op.motivoCierre === 'be' && op.profit >= 0) ? '#22c55e' : '#ef4444';
-        marcadores.push({ time: tiempoSalida, position: 'aboveBar', color: colorCierre, shape: 'circle', text: op.motivoCierre.toUpperCase() + ' ' + (op.profit >= 0 ? '+' : '') + op.profit.toFixed(2) });
+        marcadores.push({ time: tiempoSalida, position: 'aboveBar', color: colorCierre, shape: 'circle', text: '' });
       }
     }
     return marcadores;
   }
+
+  // Limpio: sin texto largo. Entrada = flecha + "C 0.09"; cierre = cuadro + "SL -91" / "TP +407".
+  // Las lineas de zona/entrada/SL/TP ya cuentan el analisis; los puntos de analisis solo salen con zoom.
+  function marcadoresEstrategia(n) {
+    if (!n || modoBot() === 'oculto') return [];
+    var rg = null;
+    try { rg = chart.timeScale().getVisibleLogicalRange(); } catch (e) {}
+    var visibles = rg ? (rg.to - rg.from) : 99999;
+    var conTexto = modoBot() === 'todo' && visibles <= 140;
+    var conPuntos = modoBot() === 'todo' && visibles <= 140;
+    var hasta = V[n - 1].time;
+    var porVela = {};
+    for (var i = 0; i < PASOS_ESTRATEGIA.length; i++) {
+      var paso = PASOS_ESTRATEGIA[i];
+      if (paso.time > hasta) continue;
+      var esOp = paso.tipo === 'entrada' || paso.tipo === 'cierre';
+      if (!esOp && !conPuntos) continue;
+      var indice = idxHasta(paso.time);
+      if (indice < 0) continue;
+      var tiempo = V[indice].time;
+      var grupo = porVela[tiempo];
+      if (grupo && grupo.esOp && !esOp) continue;
+      if (grupo && !grupo.esOp && esOp) grupo = null;
+      if (!grupo) grupo = { time: tiempo, position: 'aboveBar', color: '#e4b75a', shape: 'circle', text: '', esOp: esOp, size: 0.5 };
+      var etiqueta = '';
+      if (paso.tipo === 'entrada') {
+        var bajista = paso.direccion === 'bajista';
+        grupo.position = bajista ? 'aboveBar' : 'belowBar';
+        grupo.color = bajista ? '#ef4444' : '#22c55e';
+        grupo.shape = bajista ? 'arrowDown' : 'arrowUp';
+        grupo.size = 1;
+        var lot = '';
+        var partes = String(paso.texto || '').split(' \u00b7 ');
+        for (var k = 0; k < partes.length; k++) { if (partes[k].indexOf(' lotes') > 0) lot = partes[k].replace(' lotes', ''); }
+        etiqueta = (bajista ? 'V ' : 'C ') + lot;
+      } else if (paso.tipo === 'cierre') {
+        var texto = String(paso.texto || '');
+        var gan = texto.indexOf('TP') >= 0;
+        grupo.color = gan ? '#22c55e' : '#ef4444';
+        grupo.shape = 'square';
+        grupo.size = 1;
+        var pp = texto.split(' \u00b7 ');
+        etiqueta = (gan ? 'TP ' : 'SL ') + pp[pp.length - 1];
+      }
+      grupo.text = conTexto ? etiqueta : '';
+      porVela[tiempo] = grupo;
+    }
+    return Object.keys(porVela).map(function (t) { var g = porVela[t]; delete g.esOp; return g; });
+  }
+
+  function pintarMarcadores(n) {
+    var marc = (modoBot() === 'oculto' ? [] : marcadoresHasta(n)).concat(marcadoresManuales(n), marcadoresEstrategia(n));
+    marc.sort(function (a, b) { return a.time - b.time; });
+    serie.setMarkers(marc);
+  }
+  var temporizadorZoom = null;
+  chart.timeScale().subscribeVisibleLogicalRangeChange(function () {
+    clearTimeout(temporizadorZoom);
+    temporizadorZoom = setTimeout(function () { pintarMarcadores(window.indiceActual || 0); }, 150);
+  });
 
   function tiempoDeVelaAnterior(epoch) {
     var r = idxHasta(epoch);
     return r < 0 ? null : V[r].time;
   }
 
-  var drawerAbierto = false, tabDrawer = 'ab', ultAb = [], ultHi = [];
+  var drawerAbierto = false, tabDrawer = 'ab', ultAb = [], ultHi = [], verTodo = false, maximizado = false;
   function celdaPl(x) { return '<td style="color:' + (x >= 0 ? '#4ade80' : '#f87171') + ';font-weight:700">' + sg(x) + '</td>'; }
   function pintarTabla() {
     var body = document.getElementById('dBody');
@@ -649,13 +916,13 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     } else {
       ultHi.sort(function (a, b) { return b.est.res.idx - a.est.res.idx; });
       h = '<table id="tbl"><tr><th>Origen</th><th>Tipo</th><th>Lote</th><th>Apertura</th><th>Entrada</th><th>Salida</th><th>Motivo</th><th>Beneficio</th></tr>';
-      var lim = Math.min(ultHi.length, 40);
+      var lim = verTodo ? ultHi.length : Math.min(ultHi.length, 40);
       for (var j = 0; j < lim; j++) {
         var t2 = ultHi[j].tr, e2 = ultHi[j].est;
         h += '<tr><td>' + (esBot(t2) ? 'Bot' : 'Manual') + '</td><td style="color:' + (t2.tipo === 'compra' ? '#4ade80' : '#f87171') + '">' + (t2.tipo === 'compra' ? 'buy' : 'sell') + '</td><td>' + t2.lote + '</td><td>' + hora(t2.t) + '</td><td>' + fmt(t2.entrada) + '</td><td>' + fmt(e2.res.precio) + '</td><td>' + e2.res.motivo.toUpperCase() + '</td>' + celdaPl(e2.pl) + '</tr>';
       }
       if (!ultHi.length) h += '<tr><td colspan="8" style="color:#8893a0">Todavia no hay operaciones cerradas</td></tr>';
-      if (ultHi.length > lim) h += '<tr><td colspan="8" style="color:#8893a0">... y ' + (ultHi.length - lim) + ' mas antiguas</td></tr>';
+      if (ultHi.length > lim) h += '<tr><td colspan="8" style="color:#8893a0">... y ' + (ultHi.length - lim) + ' mas antiguas (toca Ver todo)</td></tr>';
     }
     body.innerHTML = h + '</table>';
   }
@@ -665,6 +932,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     var n = window.indiceActual || 0;
     for (var k = 0; k < lineasManual.length; k++) serie.removePriceLine(lineasManual[k]);
     lineasManual = [];
+    for (var e = 0; e < lineasEstrategia.length; e++) serie.removePriceLine(lineasEstrategia[e]);
+    lineasEstrategia = [];
     var html = '';
     var cT = 0, nT = 0, fT = 0, cM = 0, gM = 0, nM = 0, fM = 0;
     var abiertas = [], hist = [];
@@ -686,9 +955,11 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
       abiertas.push({ tr: tr, est: est });
       var lv = nivelesEn(tr, V[n - 1].time);
       var pre = man ? '' : 'BOT ';
-      lineaManual(tr.entrada, '#3b82f6', pre + (tr.tipo === 'compra' ? 'BUY' : 'SELL'), 0);
-      lineaManual(lv.sl, '#ef4444', pre + 'SL', 2);
-      lineaManual(lv.tp, '#22c55e', pre + 'TP', 2);
+      if (man || modoBot() === 'todo') {
+        lineaManual(tr.entrada, '#3b82f6', pre + (tr.tipo === 'compra' ? 'BUY' : 'SELL'), 0);
+        lineaManual(lv.sl, '#ef4444', pre + 'SL', 2);
+        lineaManual(lv.tp, '#22c55e', pre + 'TP', 2);
+      }
       if (man) {
         html += '<div class="op"><b style="color:' + (tr.tipo === 'compra' ? '#4ade80' : '#f87171') + '">' + (tr.tipo === 'compra' ? 'COMPRA' : 'VENTA') + '</b> ' + tr.lote +
           ' <b style="color:' + (est.pl >= 0 ? '#4ade80' : '#f87171') + '">' + sg(est.pl) + '</b>' +
@@ -701,9 +972,25 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     document.getElementById('resumen').textContent = 'Manual: cerradas ' + cM + (cM ? ' (' + gM + ' ganadas)' : '') + ' | Neto ' + sg(nM) + ' | Flotante ' + sg(fM);
     document.getElementById('dRes').textContent = abiertas.length + ' abiertas | Flotante ' + sg(fT) + ' | Cerradas ' + cT + ' | Neto ' + sg(nT);
     pintarTabla();
-    var marc = marcadoresHasta(n).concat(marcadoresManuales(n));
-    marc.sort(function (a, b) { return a.time - b.time; });
-    serie.setMarkers(marc);
+    var tiempoActual = n ? V[n - 1].time : 0;
+    var escenarios = {};
+    for (var p = 0; p < PASOS_ESTRATEGIA.length; p++) {
+      var paso = PASOS_ESTRATEGIA[p];
+      if (paso.time > tiempoActual || !paso.escenario_id) continue;
+      escenarios[paso.escenario_id] = paso;
+    }
+    Object.keys(escenarios).forEach(function (id) {
+      var paso = escenarios[id];
+      if (!paso.activo) return;
+      if (paso.zona_rango && paso.zona_rango.length === 2) {
+        lineaEstrategia(paso.zona_rango[0], '#e4b75a', 'Zona ' + (paso.zona || ''));
+        lineaEstrategia(paso.zona_rango[1], '#e4b75a', 'Zona ' + (paso.zona || ''));
+      }
+      lineaEstrategia(paso.entrada, '#60a5fa', 'Entrada estrategia');
+      lineaEstrategia(paso.sl, '#ef4444', 'SL estrategia');
+      lineaEstrategia(paso.tp, '#22c55e', 'TP estrategia');
+    });
+    pintarMarcadores(n);
   }
 
   // ---------- dibujos ----------
@@ -711,10 +998,39 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   var pendiente = null;
   var cursorPt = null;
   var seleccion = null;
-  var NIVELES_FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+  var NIVELES_FIB = [0, 0.236, 0.27, 0.382, 0.5, 0.618, 0.786, 0.886, 1, 1.1, 1.27, 1.38, 1.618, 2, 2.618];
+  var NIV_EST = [0.27, 0.382, 0.5, 0.886, 1.1, 1.27, 1.38];  // los que usa la estrategia
+  var pendPts = [];
+  var ultTapPoli = 0;
+  function cerrarPoli() {
+    if ((modo === 'poli' || modo === 'ruta') && pendPts.length >= 2) {
+      agregar({ tipo: modo, p1: pendPts[0], p2: pendPts[pendPts.length - 1], pts: pendPts.slice() });
+    }
+    pendPts = [];
+  }
+  function dibujarPoli(pts, c, ancho, flecha, sel, cursor) {
+    var ps = [];
+    for (var i = 0; i < pts.length; i++) { var q = pt(pts[i]); if (q) ps.push(q); }
+    if (cursor) { var qc = pt(cursor); if (qc) ps.push(qc); }
+    for (var j = 1; j < ps.length; j++) trazo(ps[j - 1].x, ps[j - 1].y, ps[j].x, ps[j].y, c, ancho);
+    if (flecha && ps.length >= 2) {
+      var e = ps[ps.length - 1], s0 = ps[ps.length - 2];
+      var ang = Math.atan2(e.y - s0.y, e.x - s0.x), L = 12;
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.moveTo(e.x, e.y);
+      ctx.lineTo(e.x - L * Math.cos(ang - 0.45), e.y - L * Math.sin(ang - 0.45));
+      ctx.lineTo(e.x - L * Math.cos(ang + 0.45), e.y - L * Math.sin(ang + 0.45));
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (sel || cursor) { for (var k = 0; k < ps.length; k++) punto(ps[k].x, ps[k].y, c); }
+  }
 
   function setModo(m) {
+    cerrarPoli();
     modo = m;
+    if (m === 'poli' || m === 'ruta') toast('Toca varios puntos. Doble toque o Enter para terminar, Escape para cancelar.');
     pendiente = null;
     var bs = document.querySelectorAll('#tools button[data-m]');
     for (var i = 0; i < bs.length; i++) {
@@ -757,6 +1073,13 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
       if (!a) continue;
       if (d.tipo === 'h') { if (Math.abs(y - a.y) < 10) return d.id; continue; }
       if (!b) continue;
+      if ((d.tipo === 'poli' || d.tipo === 'ruta') && d.pts) {
+        for (var q = 1; q < d.pts.length; q++) {
+          var q0 = pt(d.pts[q - 1]), q1 = pt(d.pts[q]);
+          if (q0 && q1 && dist(x, y, q0.x, q0.y, q1.x, q1.y) < 10) return d.id;
+        }
+        continue;
+      }
       if (d.tipo === 'tl') { if (dist(x, y, a.x, a.y, b.x, b.y) < 10) return d.id; }
       else if (d.tipo === 'ray') { var f = puntaRayo(a, b); if (dist(x, y, a.x, a.y, f.x, f.y) < 10) return d.id; }
       else if (d.tipo === 'rect' || d.tipo === 'medir') {
@@ -780,6 +1103,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   function medidas() {
     try { var w = chart.priceScale('right').width(); if (w > 0) anchoEscala = w; } catch (e) {}
     try { var h = chart.timeScale().height(); if (h > 0) altoEscala = h; } catch (e) {}
+    var tzEl = document.getElementById('tz');
+    if (tzEl && (tzEl._w !== anchoEscala || tzEl._h !== altoEscala)) { tzEl._w = anchoEscala; tzEl._h = altoEscala; tzEl.style.width = anchoEscala + 'px'; tzEl.style.height = altoEscala + 'px'; }
   }
   function ajustarCanvas() {
     var dpr = window.devicePixelRatio || 1;
@@ -826,6 +1151,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     var b = d.p2 ? pt(d.p2) : null;
     var c = d.color || '#f5c542';
     var ancho = sel ? 3 : 1.6;
+    if ((d.tipo === 'poli' || d.tipo === 'ruta') && d.pts) { dibujarPoli(d.pts, c, ancho, d.tipo === 'ruta', sel); return; }
     if (d.tipo === 'h') {
       trazo(0, a.y, pw, a.y, c, ancho);
       etiqueta(fmt(d.p1.p), pw - 2, a.y - 10, '#0b0f14', c, 'right');
@@ -857,7 +1183,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
           ctx.fillStyle = rgba(c, i % 2 ? 0.05 : 0.09);
           ctx.fillRect(x1, Math.min(prev, yy), x2 - x1, Math.abs(yy - prev));
         }
-        trazo(x1, yy, x2, yy, c, sel ? 2 : 1);
+        trazo(x1, yy, x2, yy, c, sel ? 2 : (NIV_EST.indexOf(NIVELES_FIB[i]) >= 0 ? 1.6 : 0.8));
         etiqueta((NIVELES_FIB[i] * 100).toFixed(1) + '%  ' + fmt(pr), x1 + 2, yy - 9, '#0b0f14', c, 'left');
         prev = yy;
       }
@@ -881,9 +1207,11 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     var tAct = V[n - 1].time;
     var xAct = X(tAct);
     var rg = chart.timeScale().getVisibleLogicalRange();
+    var muchas = !!(rg && (rg.to - rg.from) > 260);
     var lista = todas();
     for (var i = 0; i < lista.length; i++) {
       var tr = lista[i];
+      if (esBot(tr) && modoBot() !== 'todo') continue;
       var est = estadoTrade(tr, n);
       if (est.e === 'futuro') continue;
       var i0 = idxHasta(tr.t);
@@ -906,7 +1234,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
       var pre = esBot(tr) ? 'BOT ' : '';
       if (cerrada) {
         trazo(xe, ye, xf, ye, '#3b82f6', 1);
-        etiqueta(pre + est.res.motivo.toUpperCase() + ' ' + sg(est.pl), xf, ye - 12, '#ffffff', est.pl >= 0 ? '#15803d' : '#b91c1c', 'right');
+        if (!muchas) etiqueta(pre + est.res.motivo.toUpperCase() + ' ' + sg(est.pl), xf, ye - 12, '#ffffff', est.pl >= 0 ? '#15803d' : '#b91c1c', 'right');
       } else {
         // etiquetas al estilo MT5, pegadas a la izquierda, con el beneficio en vivo
         etiqueta(pre + (tr.tipo === 'compra' ? 'BUY ' : 'SELL ') + tr.lote + ' @ ' + fmt(tr.entrada) + '   ' + sg(est.pl), 6, ye, '#ffffff', est.pl >= 0 ? '#15803d' : '#b91c1c', 'left');
@@ -930,6 +1258,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     if (modo !== 'cursor' && modo !== 'ajuste' && pendiente && cursorPt) {
       dibujarUno({ tipo: modo, p1: pendiente, p2: cursorPt, color: cfg.color }, false, pw);
     }
+    if ((modo === 'poli' || modo === 'ruta') && pendPts.length) dibujarPoli(pendPts, cfg.color, 1.6, modo === 'ruta', false, cursorPt);
     if (modo === 'ajuste' && cursorPt) {
       var yc = Y(cursorPt.p);
       if (yc !== null) { trazo(0, yc, pw, yc, ajuste && ajuste.que === 'sl' ? '#ef4444' : '#22c55e', 1, [5, 4]); etiqueta(fmt(cursorPt.p), pw - 2, yc - 10, '#fff', '#334155', 'right'); }
@@ -949,6 +1278,13 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     if (modo === 'cursor') { seleccion = golpe(x, y); return; }
     if (modo === 'ajuste') { aplicarAjuste(p.p); return; }
     if (modo === 'h') { agregar({ tipo: 'h', p1: p }); setModo('cursor'); return; }
+    if (modo === 'poli' || modo === 'ruta') {
+      var ahora = Date.now();
+      var pa = pendPts.length ? pt(pendPts[pendPts.length - 1]) : null;
+      if (pa && ahora - ultTapPoli < 450 && Math.abs(pa.x - x) < 14 && Math.abs(pa.y - y) < 14) { cerrarPoli(); setModo('cursor'); return; }
+      pendPts.push(p); ultTapPoli = ahora; cursorPt = p;
+      return;
+    }
     if (!pendiente) { pendiente = p; cursorPt = p; return; }
     agregar({ tipo: modo, p1: pendiente, p2: p });
     setModo('cursor');
@@ -1055,8 +1391,36 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
       pintarTabla();
     });
   }
+  function pintarBotonesCajon() {
+    var bt = document.getElementById('dTodo'), bm = document.getElementById('dMax');
+    bt.className = verTodo ? 'on' : '';
+    bt.innerHTML = verTodo ? 'Ver menos' : 'Ver todo';
+    bm.className = maximizado ? 'on' : '';
+    bm.innerHTML = maximizado ? '&#10005; Salir de pantalla completa' : '&#9974; Pantalla completa';
+    document.getElementById('drawer').className = 'panel' + (maximizado ? ' max' : '');
+  }
+  document.getElementById('dTodo').addEventListener('click', function () {
+    verTodo = !verTodo;
+    drawerAbierto = true;
+    document.getElementById('dTog').innerHTML = '&#9662; Operaciones';
+    pintarBotonesCajon();
+    pintarTabla();
+  });
+  function ponerMaximizado(v) {
+    maximizado = v;
+    if (v) {
+      drawerAbierto = true;
+      verTodo = true;
+      document.getElementById('dTog').innerHTML = '&#9662; Operaciones';
+    }
+    pintarBotonesCajon();
+    pintarTabla();
+  }
+  document.getElementById('dMax').addEventListener('click', function () { ponerMaximizado(!maximizado); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && maximizado) ponerMaximizado(false); });
+  pintarBotonesCajon();
   if (!cfg.pos) cfg.pos = {};
-  var cuerpoAbierto = cfg.tradeAbierto === undefined ? window.innerWidth > 700 : !!cfg.tradeAbierto;
+  var cuerpoAbierto = cfg.tradeAbierto === undefined ? false : !!cfg.tradeAbierto;
   var panelTrade = document.getElementById('trade');
   var panelTools = document.getElementById('tools');
   function pintarPanel() {
@@ -1122,6 +1486,80 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
   pintarColor();
   setModo('cursor');
 
+  function modoBot() { return cfg.verBot || 'todo'; }
+  var bBot = document.getElementById('bBot');
+  function pintarBot() {
+    var m = modoBot();
+    bBot.innerHTML = 'Bot ' + (m === 'todo' ? '&#9679;' : (m === 'marcas' ? '&#9680;' : '&#9675;'));
+    bBot.className = 'keep' + (m === 'oculto' ? '' : ' on');
+    bBot.title = 'Operaciones del bot: ' + (m === 'todo' ? 'TODO (cajas, lineas y etiquetas)' : (m === 'marcas' ? 'solo MARCAS (flechas)' : 'OCULTAS')) + '. Toca para cambiar.';
+  }
+  bBot.addEventListener('click', function () {
+    var m = modoBot();
+    cfg.verBot = m === 'todo' ? 'marcas' : (m === 'marcas' ? 'oculto' : 'todo');
+    pintarBot();
+    refrescar(window.indiceActual || 0);
+    guardar();
+  });
+  pintarBot();
+
+  var bTipo = document.getElementById('bTipo');
+  function aplicarTipo() {
+    var linea = cfg.tipoGrafico === 'linea';
+    var nada = 'rgba(0,0,0,0)';
+    serie.applyOptions(linea
+      ? { upColor: nada, downColor: nada, wickUpColor: nada, wickDownColor: nada, borderVisible: false }
+      : { upColor: '#22c55e', downColor: '#ef4444', wickUpColor: '#22c55e', wickDownColor: '#ef4444', borderVisible: false });
+    serieL.applyOptions({ visible: linea });
+    if (!linea) serieL.setData([]);
+    bTipo.textContent = linea ? 'Velas' : 'Linea';
+    bTipo.className = linea ? 'on' : '';
+  }
+  bTipo.addEventListener('click', function () {
+    cfg.tipoGrafico = cfg.tipoGrafico === 'linea' ? 'velas' : 'linea';
+    aplicarTipo();
+    if (window.setIndice) window.setIndice(window.indiceActual || 0);
+    guardar();
+  });
+  aplicarTipo();
+
+  var MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  function aplicarTz() {
+    TZ = (Number(cfg.tz) || 0) * 3600;
+    chart.applyOptions({
+      localization: { timeFormatter: function (t) { return hora(t); } },
+      timeScale: {
+        tickMarkFormatter: function (t, tipo) {
+          var d = new Date((t + TZ) * 1000);
+          if (tipo === 3 || tipo === 4) return dosd(d.getUTCHours()) + ':' + dosd(d.getUTCMinutes());
+          if (tipo === 2) return String(d.getUTCDate());
+          if (tipo === 1) return MESES[d.getUTCMonth()];
+          return String(d.getUTCFullYear());
+        },
+      },
+    });
+  }
+  var selTz = document.getElementById('tz');
+  for (var hz = -12; hz <= 14; hz++) {
+    var op = document.createElement('option');
+    op.value = String(hz);
+    op.textContent = hz === 0 ? 'Hora MT5' : (hz > 0 ? 'MT5 +' + hz + 'h' : 'MT5 ' + hz + 'h');
+    selTz.appendChild(op);
+  }
+  selTz.value = String(Number(cfg.tz) || 0);
+  selTz.addEventListener('change', function () {
+    cfg.tz = Number(selTz.value) || 0;
+    aplicarTz();
+    refrescar(window.indiceActual || 0);
+    guardar();
+  });
+  aplicarTz();
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (modo === 'poli' || modo === 'ruta')) { cerrarPoli(); setModo('cursor'); }
+    else if (e.key === 'Escape') { pendPts = []; pendiente = null; setModo('cursor'); }
+  });
+
   // ---------- indice del replay ----------
   var rangoInicial = false;
   window.setIndice = function (i) {
@@ -1130,6 +1568,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
     window.indiceActual = indice;
     var velasVisibles = TODAS_VELAS.slice(0, indice);
     serie.setData(velasVisibles);
+    if (cfg.tipoGrafico === 'linea') serieL.setData(velasVisibles.map(function (v) { return { time: v.time, value: v.close }; }));
     if (!rangoInicial && velasVisibles.length) {
       rangoInicial = true;
       chart.timeScale().setVisibleLogicalRange({
@@ -1156,7 +1595,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#0b0f14;overflow:
 </body></html>`;
 }
 
-function ReplayBacktest({ velas, operaciones, diagnostico, simbolo, desde, hasta, indiceInicio, timeframeEntrada, timeframeMacro, onClose }: { velas: VelaReplay[]; operaciones: { tipo: string; entrada: number; sl: number; tp: number; salida: number; profit: number; hora_apertura: string; hora_cierre: string; motivo_cierre?: 'sl' | 'tp' | 'be'; be_aplicado?: boolean }[]; diagnostico?: z.infer<typeof BacktestDiagnosticSchema>; simbolo: string; desde: string; hasta: string; indiceInicio?: number; timeframeEntrada?: string | null; timeframeMacro?: string | null; onClose: () => void }) {
+function ReplayBacktest({ velas, operaciones, pasosEstrategia = [], diagnostico, simbolo, desde, hasta, indiceInicio, timeframeEntrada, timeframeMacro, onClose }: { velas: VelaReplay[]; operaciones: { tipo: string; entrada: number; sl: number; tp: number; salida: number; profit: number; hora_apertura: string; hora_cierre: string; motivo_cierre?: 'sl' | 'tp' | 'be'; be_aplicado?: boolean }[]; pasosEstrategia?: z.infer<typeof PasoEstrategiaSchema>[]; diagnostico?: z.infer<typeof BacktestDiagnosticSchema>; simbolo: string; desde: string; hasta: string; indiceInicio?: number; timeframeEntrada?: string | null; timeframeMacro?: string | null; onClose: () => void }) {
   const webviewRef = useRef<WebView>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const timeframeBase = timeframeEntrada || 'M15';
@@ -1193,7 +1632,8 @@ function ReplayBacktest({ velas, operaciones, diagnostico, simbolo, desde, hasta
   // Dibujos y operaciones manuales viven en el iframe/webview; aquí guardamos la última copia
   // para reinyectarla cuando el HTML se regenera (cambio de temporalidad).
   const estadoManualRef = useRef<string>('');
-  const html = useMemo(() => construirHtmlReplay(velasActivas, operaciones, contratoDe(simbolo), estadoManualRef.current), [velasActivas, operaciones, simbolo]);
+  const html = useMemo(() => construirHtmlReplay(velasActivas, operaciones, pasosEstrategia, contratoDe(simbolo), estadoManualRef.current), [velasActivas, operaciones, pasosEstrategia, simbolo]);
+  const pasoActual = pasosEstrategia.filter((paso) => indice > 0 && paso.time <= (velasActivas[indice - 1]?.time ?? 0)).slice(-1)[0];
   const velocidades = [1, 2, 5, 10, 20, 50];
   const timeframesReplay = ['M1', 'M3', 'M5', 'M15', 'M30', 'H1', 'H2', 'H4', 'D1', 'W1', 'MN1'];
 
@@ -1291,26 +1731,18 @@ function ReplayBacktest({ velas, operaciones, diagnostico, simbolo, desde, hasta
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: '#0b0f14' }}>
-      {!pantallaCompleta ? <View style={[styles.replayHeader, { paddingTop: 8, paddingBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 10 }]}>
+      {!pantallaCompleta ? <View style={[styles.replayHeader, { paddingTop: 6, paddingBottom: 4, flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.replayTitle}>{simbolo} · {timeframe} · Replay del backtest</Text>
-          <Text style={[styles.replayHint, { marginTop: 2 }]}>MT5 · {desde} — {hasta} · Azul: entrada · Rojo: SL · Verde: TP</Text>
-          <Text style={[styles.replayHint, { marginTop: 2 }]}>
-            {operaciones.length} operaciones generadas{diagnostico ? ` · Estrategia ${diagnostico.estrategia_activa} · ${diagnostico.senales_detectadas} señales` : ''}
-          </Text>
-          {diagnostico?.timeframes_faltantes.length ? <Text style={[styles.replayHint, styles.red, { marginTop: 2 }]}>
-            Falta histórico de: {diagnostico.timeframes_faltantes.join(', ')}
-          </Text> : null}
-          {diagnostico && diagnostico.senales_detectadas === 0 ? <Text style={[styles.replayHint, { marginTop: 2 }]}>
-            No hubo señales en este backtest. Cierra el replay y vuelve a ejecutarlo para revisar el diagnóstico completo.
-          </Text> : null}
-          {cargandoVelas ? <Text style={[styles.foot, { marginTop: 2 }]}>Cargando histórico MT5 para {timeframe}...</Text> : null}
+          <Text style={[styles.replayTitle, { fontSize: 15 }]}>{simbolo} · {timeframe}</Text>
+          <Text style={styles.replayHint}>{`${desde} — ${hasta} · ${operaciones.length} ops de la estrategia${diagnostico ? ` · ${diagnostico.senales_detectadas} señales` : ''}`}</Text>
+          {pasoActual ? <Text style={styles.replayHint}>Análisis: {pasoActual.texto}</Text> : null}
+          {diagnostico?.timeframes_faltantes.length ? <Text style={[styles.replayHint, styles.red]}>Falta histórico de: {diagnostico.timeframes_faltantes.join(', ')}</Text> : null}
+          {diagnostico && diagnostico.senales_detectadas === 0 ? <Text style={styles.replayHint}>Sin señales en este backtest: ciérralo y vuelve a ejecutarlo para ver el diagnóstico.</Text> : null}
+          {cargandoVelas ? <Text style={styles.replayHint}>Cargando histórico MT5 para {timeframe}...</Text> : null}
           {errorVelas ? <Text style={styles.error}>{errorVelas}</Text> : null}
         </View>
-        <View style={{ width: 96 }}>
-          <Button compact label="⛶ Pantalla completa" onPress={alternarPantallaCompleta} color="#3a4656" />
-          <Button compact label="✕ Cerrar" onPress={onClose} color="#8a2c2c" />
-        </View>
+        <Button compact label="⛶" onPress={alternarPantallaCompleta} color="#3a4656" />
+        <Button compact label="✕" onPress={onClose} color="#8a2c2c" />
       </View> : null}
         {Platform.OS === 'web'
           ? createElement('iframe', {
@@ -1344,25 +1776,20 @@ function ReplayBacktest({ velas, operaciones, diagnostico, simbolo, desde, hasta
             <Button compact label="⛶ Salir" onPress={alternarPantallaCompleta} color="#b88b35" />
           </View>
         ) : (
-        <View style={[styles.replayBar, { padding: 8, paddingBottom: 10 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <Text style={[styles.foot, { marginTop: 0 }]}>Vela {indice} / {velasActivas.length}{reproduciendo ? ` · ${velocidad}x` : ''}</Text>
-            <View style={[styles.progressTrack, { flex: 1, height: 5, marginBottom: 0 }]}><View style={[styles.progressFill, { width: `${((indice - indiceInicioActivo) / Math.max(1, velasActivas.length - indiceInicioActivo)) * 100}%` }]} /></View>
-          </View>
-          <View style={[styles.rowButtons, { gap: 5, marginBottom: 5 }]}>
+        <View style={[styles.replayBar, { paddingVertical: 5 }]}>
+          <View style={[styles.progressTrack, { height: 3, marginBottom: 5, marginHorizontal: 8 }]}><View style={[styles.progressFill, { width: `${((indice - indiceInicioActivo) / Math.max(1, velasActivas.length - indiceInicioActivo)) * 100}%` }]} /></View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', gap: 5, paddingHorizontal: 8 }}>
             <Button compact label="⏮" onPress={() => { setReproduciendo(false); setIndice(Math.min(indiceInicioActivo, velasActivas.length)); }} />
             <Button compact label="-1" onPress={() => { setReproduciendo(false); setIndice((i) => Math.max(1, i - 1)); }} />
-            <Button compact label="-10" onPress={() => { setReproduciendo(false); setIndice((i) => Math.max(1, i - 10)); }} />
-            <Button compact label={reproduciendo ? '⏸ Pausa' : '▶ Play'} onPress={() => { if (!cargandoVelas && !errorVelas) setReproduciendo((r) => !r); }} color="#237a4b" />
+            <Button compact label={reproduciendo ? '⏸' : '▶'} onPress={() => { if (!cargandoVelas && !errorVelas) setReproduciendo((r) => !r); }} color="#237a4b" />
             <Button compact label="+1" onPress={() => { setReproduciendo(false); setIndice((i) => Math.min(velasActivas.length, i + 1)); }} />
             <Button compact label="+10" onPress={() => { setReproduciendo(false); setIndice((i) => Math.min(velasActivas.length, i + 10)); }} />
             <Button compact label={`${velocidad}x`} onPress={() => setVelocidad((v) => velocidades[(velocidades.indexOf(v) + 1) % velocidades.length])} />
-          </View>
-          <View style={[styles.rowButtons, { gap: 5 }]}>
-            {operaciones.length ? <Button compact label="◀ Op. bot" onPress={() => irAOperacionBot(-1)} color="#3a4656" /> : null}
-            {operaciones.length ? <Button compact label="Op. bot ▶" onPress={() => irAOperacionBot(1)} color="#3a4656" /> : null}
+            <Text style={[styles.foot, { marginTop: 0 }]}>{indice}/{velasActivas.length}</Text>
+            {operaciones.length ? <Button compact label="◀ Op." onPress={() => irAOperacionBot(-1)} color="#3a4656" /> : null}
+            {operaciones.length ? <Button compact label="Op. ▶" onPress={() => irAOperacionBot(1)} color="#3a4656" /> : null}
             {timeframesReplay.map((item) => <Button key={item} compact label={item} onPress={() => { setReproduciendo(false); setTimeframe(item); }} color={timeframe === item ? '#b88b35' : '#303b48'} />)}
-          </View>
+          </ScrollView>
         </View>
         )}
       </View>
@@ -1370,8 +1797,8 @@ function ReplayBacktest({ velas, operaciones, diagnostico, simbolo, desde, hasta
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
-function Button({ label, onPress, color = '#303b48', compact = false }: { label: string; onPress: () => void; color?: string; compact?: boolean }) { return <Pressable style={[styles.button, { backgroundColor: color }, compact ? { minWidth: 40, paddingVertical: 7, paddingHorizontal: 4, marginBottom: 0 } : null]} onPress={onPress}><Text style={styles.buttonText}>{label}</Text></Pressable>; }
+function Section({ title, children, wide = false }: { title: string; children: React.ReactNode; wide?: boolean }) { return <View style={[styles.section, wide ? styles.sectionWide : null]}><Text style={styles.sectionTitle}>{title}</Text>{children}</View>; }
+function Button({ label, onPress, color = '#303b48', compact = false }: { label: string; onPress: () => void; color?: string; compact?: boolean }) { return <Pressable style={[styles.button, { backgroundColor: color }, compact ? { flex: 0, flexShrink: 0, minWidth: 40, paddingVertical: 7, paddingHorizontal: 8, marginBottom: 0 } : null]} onPress={onPress}><Text style={styles.buttonText}>{label}</Text></Pressable>; }
 // height/maxHeight + overflow explícito: sin esto, en el navegador (react-native-web)
 // un <textarea> con mucho texto (ej. una estrategia guardada con el código fuente
 // completo, cientos de líneas) puede desbordarse visualmente por fuera de su caja
@@ -1426,13 +1853,16 @@ function dateComoFecha(date: Date) {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
-function DateField({ label, value, onChangeText }: { label: string; value: string; onChangeText: (value: string) => void }) {
+function DateField({ label, value, onChangeText, minDate, maxDate, disabled = false }: { label: string; value: string; onChangeText: (value: string) => void; minDate?: string; maxDate?: string; disabled?: boolean }) {
   const [visible, setVisible] = useState(false);
   if (Platform.OS === 'web') return <View style={styles.field}>
     <Text style={styles.label}>{label}</Text>
     {createElement('input', {
       type: 'date',
       value,
+      min: minDate,
+      max: maxDate,
+      disabled,
       onChange: (event) => onChangeText(event.currentTarget.value),
       style: {
         width: '100%', minHeight: 42, boxSizing: 'border-box', padding: 11,
@@ -1443,13 +1873,13 @@ function DateField({ label, value, onChangeText }: { label: string; value: strin
   </View>;
   return <View style={styles.field}>
     <Text style={styles.label}>{label}</Text>
-    <Pressable style={styles.input} onPress={() => setVisible(true)}>
+    <Pressable style={styles.input} disabled={disabled} onPress={() => setVisible(true)}>
       <Text style={styles.dateValue}>{value || 'Elegir fecha'}</Text>
     </Pressable>
     <Modal visible={visible} transparent animationType="fade" onRequestClose={() => setVisible(false)}>
       <Pressable style={styles.dateModalBackdrop} onPress={() => setVisible(false)}>
         <Pressable style={styles.dateModal} onPress={(event) => event.stopPropagation()}>
-          <DateTimePicker value={fechaComoDate(value)} mode="date" display="calendar" onChange={(event, selectedDate) => {
+          <DateTimePicker value={fechaComoDate(value)} mode="date" display="calendar" minimumDate={minDate ? fechaComoDate(minDate) : undefined} maximumDate={maxDate ? fechaComoDate(maxDate) : undefined} onChange={(event, selectedDate) => {
             if (selectedDate) onChangeText(dateComoFecha(selectedDate));
             setVisible(false);
           }} />
@@ -1459,17 +1889,13 @@ function DateField({ label, value, onChangeText }: { label: string; value: strin
     </Modal>
   </View>;
 }
-function TimeframeSelector({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <View style={styles.field}>
-    <Text style={styles.label}>{label}</Text>
-    <View style={styles.timeframeButtons}>
-      {BACKTEST_TIMEFRAMES.map((timeframe) => <Pressable key={timeframe} onPress={() => onChange(timeframe)} style={[styles.timeframeOption, value === timeframe && styles.timeframeOptionActive]}><Text style={[styles.timeframeOptionText, value === timeframe && styles.timeframeOptionTextActive]}>{timeframe}</Text></Pressable>)}
-    </View>
-  </View>;
-}
-
 export default function App() {
+  const { width: viewportWidth } = useWindowDimensions();
+  const compactLayout = viewportWidth < 760;
+  const useSidebar = viewportWidth >= 1100;
   const [state, setState] = useState<State | null>(null); const [account, setAccount] = useState<Account | null>(null); const [positions, setPositions] = useState<Position[]>([]); const [history, setHistory] = useState<HistoryItem[]>([]); const [message, setMessage] = useState(''); const [loading, setLoading] = useState(true); const [refreshing, setRefreshing] = useState(false);
+  const [analistaWatchlist, setAnalistaWatchlist] = useState<z.infer<typeof AnalistaWatchlistSchema> | null>(null);
+  const [analistaWatchlistError, setAnalistaWatchlistError] = useState('');
   const [symbol, setSymbol] = useState(''); const [simbolosPermitidos, setSimbolosPermitidos] = useState(''); const [volume, setVolume] = useState('0.01'); const [sl, setSl] = useState(''); const [tp, setTp] = useState(''); const [orderType, setOrderType] = useState<'mercado' | 'limite'>('mercado'); const [entryPrice, setEntryPrice] = useState(''); const [blocks, setBlocks] = useState<Record<string, Block>>({}); const [keys, setKeys] = useState<string[]>([]); const [buy, setBuy] = useState<Condition[]>([]); const [sell, setSell] = useState<Condition[]>([]); const [buyOp, setBuyOp] = useState<'and' | 'or'>('and'); const [sellOp, setSellOp] = useState<'and' | 'or'>('and'); const [sendingOrder, setSendingOrder] = useState(false); const [perdidaDiariaPct, setPerdidaDiariaPct] = useState('5'); const [spreadMaximo, setSpreadMaximo] = useState('0');
   const [saved, setSaved] = useState<Saved[]>([]); const [name, setName] = useState(''); const [explanation, setExplanation] = useState(''); const [code, setCode] = useState(''); const [savedVolume, setSavedVolume] = useState(''); const [savedSl, setSavedSl] = useState(''); const [savedTp, setSavedTp] = useState('');
   const [savedUsaMultiTf, setSavedUsaMultiTf] = useState(false); const [savedTfEntrada, setSavedTfEntrada] = useState(''); const [savedTfMacro, setSavedTfMacro] = useState('');
@@ -1499,11 +1925,27 @@ export default function App() {
   // El formulario de estrategia está oculto hasta pulsar "Agregar estrategia nueva" (o Editar).
   const [formAbierto, setFormAbierto] = useState(false);
   const [posicionSeleccionada, setPosicionSeleccionada] = useState<Position | null>(null);
-  const [btFrom, setBtFrom] = useState('2026-01-01'); const [btTo, setBtTo] = useState('2026-06-01'); const [btBalance, setBtBalance] = useState('10000'); const [btTfEntrada, setBtTfEntrada] = useState('M15'); const [btTfMacro, setBtTfMacro] = useState('H1'); const [btRunning, setBtRunning] = useState(false); const [btResult, setBtResult] = useState<BacktestResult | null>(null); const [btProgress, setBtProgress] = useState(0); const [btShowReplay, setBtShowReplay] = useState(false);
-  const [tab, setTab] = useState<'mercado' | 'estrategia' | 'operar' | 'historial' | 'fundamentales' | 'telegram'>('mercado');
+  const [btFrom, setBtFrom] = useState('2026-01-01'); const [btTo, setBtTo] = useState('2026-06-01'); const [btBalance, setBtBalance] = useState('10000'); const [btRunning, setBtRunning] = useState(false); const [btResult, setBtResult] = useState<BacktestResult | null>(null); const [btProgress, setBtProgress] = useState(0); const [btShowReplay, setBtShowReplay] = useState(false); const [btDisenoNuevo, setBtDisenoNuevo] = useState(true);
+  const [btDateRange, setBtDateRange] = useState<{ desde: string; hasta: string } | null>(null); const [btDateError, setBtDateError] = useState('');
+  const [tab, setTab] = useState<AppTab>('mercado');
+  const [proyecciones, setProyecciones] = useState<z.infer<typeof ProyeccionesSchema> | null>(null);
+  const [proyeccionesError, setProyeccionesError] = useState('');
+  const [proyeccionesMensaje, setProyeccionesMensaje] = useState('');
+  const [proyeccionOcupada, setProyeccionOcupada] = useState('');
+  const [groupSymbol, setGroupSymbol] = useState('');
+  const [groupSide, setGroupSide] = useState<'compra' | 'venta'>('compra');
+  const [groupBuffer, setGroupBuffer] = useState('');
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [groupResult, setGroupResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const groupSymbols = useMemo(() => Array.from(new Set(positions.map((position) => position.simbolo))), [positions]);
+  const groupPositions = useMemo(
+    () => positions.filter((position) => position.simbolo === groupSymbol && position.tipo === groupSide),
+    [positions, groupSymbol, groupSide],
+  );
+  useEffect(() => {
+    if (groupSymbols.length && !groupSymbols.includes(groupSymbol)) setGroupSymbol(groupSymbols[0]);
+  }, [groupSymbols, groupSymbol]);
   const [maxOperaciones, setMaxOperaciones] = useState('1');
-  const [beCascadaBufferPct, setBeCascadaBufferPct] = useState('20');
-  const [beDinamicoFiboNivel, setBeDinamicoFiboNivel] = useState('0.5');
   const [gruposTemporalidadTexto, setGruposTemporalidadTexto] = useState('');
   // Escaneo por temporalidades: Automático (grupos y roles por defecto) o Manual (tú eliges).
   const [escaneoManual, setEscaneoManual] = useState(false);
@@ -1538,6 +1980,54 @@ export default function App() {
   const [tgProbando, setTgProbando] = useState(false);
   // --- Fundamentales (NFP, IPC, tasas...) ---
   const [fundamentales, setFundamentales] = useState<z.infer<typeof FundamentalesSchema>>({ pendientes: [], en_proceso: [], pasados: [] });
+  const cargarProyecciones = useCallback(async () => {
+    try {
+      setProyecciones(await api('/api/analista/proyecciones', ProyeccionesSchema));
+      setProyeccionesError('');
+    } catch (error) {
+      setProyeccionesError(error instanceof Error ? error.message : 'No se pudieron cargar las proyecciones');
+    }
+  }, []);
+  useEffect(() => {
+    if (tab !== 'proyecciones') return;
+    cargarProyecciones();
+    const timer = setInterval(cargarProyecciones, 10000);
+    return () => clearInterval(timer);
+  }, [tab, cargarProyecciones]);
+  function confirmarOperacionProyeccion(simbolo: string, clave: string, escenario: z.infer<typeof ProyeccionAnalistaSchema>) {
+    const tipo = escenario.direccion === 'alcista' ? 'COMPRA' : 'VENTA';
+    const detalle = `${tipo} ${simbolo}\nEntrada ref. ${escenario.entrada} · SL ${escenario.sl}\n${escenario.operaciones.map((op) => {
+      const lote = escenario.lotes.find((item) => item.operacion === op.nombre)?.lote ?? 0;
+      return `${op.nombre}: ${lote} lotes · TP ${op.tp}`;
+    }).join('\n')}\n\n¿Enviar la orden a MT5?`;
+    const ejecutar = async () => {
+      const id = `${simbolo}:${clave}`;
+      setProyeccionOcupada(id);
+      setProyeccionesError('');
+      setProyeccionesMensaje('');
+      try {
+        const resultado = await api('/api/analista/proyecciones/operar', z.object({
+          ok: z.boolean(),
+          resultados: z.array(z.string()),
+        }), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ simbolo, clave }) });
+        if (resultado.ok) setProyeccionesMensaje(resultado.resultados.join(' · '));
+        else setProyeccionesError(resultado.resultados.join(' · ') || 'La orden no se abrió.');
+        await cargarProyecciones();
+      } catch (error) {
+        setProyeccionesError(error instanceof Error ? error.message : 'No se pudo enviar la orden');
+      } finally {
+        setProyeccionOcupada('');
+      }
+    };
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Confirmar operación de SpotPlus\n\n${detalle}`)) void ejecutar();
+      return;
+    }
+    Alert.alert('Confirmar operación de SpotPlus', detalle, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Enviar orden', onPress: () => { void ejecutar(); } },
+    ]);
+  }
   async function cargarFundamentales() {
     try { setFundamentales(await api('/api/fundamentales', FundamentalesSchema, {})); } catch { }
   }
@@ -1545,11 +2035,42 @@ export default function App() {
     try { return new Date(iso).toLocaleString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true, day: '2-digit', month: 'short' }); } catch { return iso; }
   }
   const load = useCallback(async () => { try { const [s, a, p, h, catalog, list, tg] = await Promise.all([api('/api/estado', StateSchema), api('/api/cuenta', AccountResponseSchema), api('/api/posiciones', z.array(PositionSchema)), api('/api/historial?dias=7', z.array(HistoryItemSchema)), api('/api/bloques_disponibles', BloquesDisponiblesSchema), api('/api/estrategias_guardadas', z.array(SavedSchema)), api('/api/telegram', TelegramConfigSchema)]); setState(s); setAccount('error' in a ? null : a); setPositions(p); setHistory(h); setBlocks(catalog.bloques); setKeys(Object.keys(catalog.bloques)); setSaved(list); setSymbol(s.config?.simbolo || ''); setPerdidaDiariaPct(String(s.config?.circuito_perdida_diaria_pct ?? 5)); setSpreadMaximo(String(s.config?.spread_maximo_puntos ?? 0)); setMaxOperaciones(String(s.config?.max_operaciones_por_simbolo ?? 1));
-      setBeCascadaBufferPct(String(s.config?.be_cascada_buffer_pct ?? 20));
-      setBeDinamicoFiboNivel(String(s.config?.be_dinamico_fibo_nivel ?? 0.5));
+      try {
+        setAnalistaWatchlist(await api('/api/analista/watchlist', AnalistaWatchlistSchema));
+        setAnalistaWatchlistError('');
+      } catch (error) {
+        setAnalistaWatchlist(null);
+        setAnalistaWatchlistError(error instanceof Error ? error.message : 'No se pudo cargar la lista de activos');
+      }
       setGruposTemporalidadTexto(Object.entries(s.config?.grupos_temporalidad || {}).map(([tf, grupo]) => `${tf}:${grupo}`).join(', '));
       setTgActivo(tg.activo); setTgToken(tg.bot_token); setTgChatId(tg.chat_id); setTgAvisoApertura(tg.aviso_apertura); setTgAvisoCierre(tg.aviso_cierre); setTgAvisoSlTp(tg.aviso_sl_tp); setTgAvisoParcial(tg.aviso_parcial); setTgAvisoZona(tg.aviso_zona); setMessage(''); } catch (error) { setMessage(error instanceof Error ? error.message : 'No se pudo conectar al backend'); } finally { setLoading(false); setRefreshing(false); } }, []);
   useEffect(() => { load(); cargarFundamentales(); const timer = setInterval(() => { load(); cargarFundamentales(); }, 10000); return () => clearInterval(timer); }, [load]);
+  useEffect(() => {
+    const simbolo = state?.config?.simbolo;
+    if (!simbolo) return;
+    let cancelado = false;
+    setBtDateRange(null);
+    async function cargarRangoFechas() {
+      try {
+        setBtDateError('');
+        const rango = await api('/api/backtest/analista/rango', BacktestDateRangeSchema);
+        if (cancelado) return;
+        if (!rango.desde || !rango.hasta) {
+          setBtDateRange(null);
+          setBtDateError(`No hay datos históricos disponibles para ${simbolo}.`);
+          return;
+        }
+        const { desde, hasta } = rango;
+        setBtDateRange({ desde, hasta });
+        setBtFrom((actual) => actual < desde || actual > hasta ? desde : actual);
+        setBtTo((actual) => actual < desde || actual > hasta ? hasta : actual);
+      } catch (error) {
+        if (!cancelado) setBtDateError(error instanceof Error ? error.message : 'No se pudo cargar el rango histórico');
+      }
+    }
+    void cargarRangoFechas();
+    return () => { cancelado = true; };
+  }, [state?.config?.simbolo]);
   // Precio en vivo: el backend refresca el tick cada 1 s, así que el panel consulta solo
   // /api/estado cada 1 s (ligero) en vez de esperar al refresco completo de 10 s.
   useEffect(() => {
@@ -1762,17 +2283,79 @@ export default function App() {
   }
   async function confirmOrder(type: 'compra' | 'venta') {
     setSendingOrder(true); setMessage(`Enviando ${type === 'venta' ? 'vender' : 'comprar'}...`);
-    await run('/api/orden', { tipo: type, volumen: Number(volume), sl: Number(sl) || 0, tp: Number(tp) || 0, tipo_orden: orderType, precio_entrada: Number(entryPrice) || 0 }, `Orden de ${type} ${orderType} enviada`);
+    await run('/api/orden', { tipo: type, simbolo: symbol, volumen: Number(volume), sl: Number(sl) || 0, tp: Number(tp) || 0, tipo_orden: orderType, precio_entrada: Number(entryPrice) || 0 }, `Orden de ${type} ${orderType} enviada`);
     setSendingOrder(false);
+  }
+  async function executeGroupAction(action: 'cerrar' | 'mover_sl') {
+    setGroupBusy(true);
+    setGroupResult(null);
+    try {
+      const resultado = await api(
+        '/api/posiciones/accion-grupal',
+        BulkActionResultSchema,
+        post({
+          simbolo: groupSymbol,
+          tipo: groupSide,
+          accion: action,
+          ...(action === 'mover_sl' ? { colchon_puntos: Number(groupBuffer) } : {}),
+        }),
+      );
+      const exitosas = resultado.exitosas ?? [];
+      const omitidas = resultado.omitidas ?? [];
+      const fallidas = resultado.fallidas ?? [];
+      const detalle = [
+        `${exitosas.length} ejecutada(s).`,
+        ...exitosas.map((item) => `Ticket ${item.ticket}${item.sl != null ? ` · SL ${item.sl}` : ''}`),
+        ...omitidas.map((item) => `Ticket ${item.ticket} omitido: ${item.motivo}`),
+        ...fallidas.map((item) => `Ticket ${item.ticket} falló: ${item.error}`),
+      ];
+      if (resultado.error) detalle.unshift(resultado.error);
+      setGroupResult({ ok: resultado.ok, text: detalle.join('\n') });
+      await load();
+    } catch (error) {
+      setGroupResult({
+        ok: false,
+        text: error instanceof Error ? error.message : 'No se pudo completar la acción grupal.',
+      });
+    } finally {
+      setGroupBusy(false);
+    }
+  }
+  function confirmGroupAction(action: 'cerrar' | 'mover_sl') {
+    if (!groupSymbol || groupPositions.length === 0 || groupBusy) {
+      Alert.alert('No hay posiciones', 'No hay posiciones abiertas que coincidan con el símbolo y lado seleccionados.');
+      return;
+    }
+    const buffer = Number(groupBuffer);
+    if (action === 'mover_sl' && (!Number.isFinite(buffer) || buffer <= 0)) {
+      Alert.alert('Colchón inválido', 'Indica un colchón mayor que cero en puntos del símbolo.');
+      return;
+    }
+    const nombresAccion = action === 'cerrar' ? 'CERRAR' : 'MOVER EL SL';
+    const resumen = `${nombresAccion} ${groupPositions.length} posición(es) ${groupSide.toUpperCase()} de ${groupSymbol}.`
+      + (action === 'mover_sl' ? `\nColchón: ${buffer} puntos (${groupBuffer} × el punto del símbolo).` : '')
+      + '\nEl servidor volverá a comprobar las posiciones justo antes de actuar.';
+    const ejecutar = () => { void executeGroupAction(action); };
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Confirmar acción grupal\n\n${resumen}`)) ejecutar();
+      return;
+    }
+    Alert.alert('Confirmar acción grupal', resumen, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Confirmar', style: action === 'cerrar' ? 'destructive' : 'default', onPress: ejecutar },
+    ]);
   }
   // El backend arranca el backtest en un hilo aparte y devuelve un job_id al
   // instante. Acá se hace polling del % de avance en vez de quedarse
   // congelado en "Simulando..." sin saber cuánto falta.
   async function runBacktest() {
-    if (!btFrom.trim() || !btTo.trim()) { Alert.alert('Faltan fechas', 'Indica desde y hasta (YYYY-MM-DD).'); return; }
+    if (!btDateRange) { Alert.alert('Sin datos históricos', btDateError || 'Espera a que se cargue el rango de fechas disponible.'); return; }
+    if (!btFrom.trim() || !btTo.trim()) { Alert.alert('Faltan fechas', 'Elige las fechas desde y hasta en el calendario.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(btFrom.trim()) || !/^\d{4}-\d{2}-\d{2}$/.test(btTo.trim())) { Alert.alert('Formato de fecha inválido', 'Usa el formato AAAA-MM-DD.'); return; }
+    if (btTo < btFrom) { Alert.alert('Rango de fechas inválido', 'La fecha HASTA debe ser igual o posterior a DESDE.'); return; }
     setBtRunning(true); setBtResult(null); setBtProgress(0);
     try {
-      const { job_id } = await api('/api/backtest', BacktestStartSchema, post({ desde: btFrom.trim(), hasta: btTo.trim(), balance_inicial: Number(btBalance) || 10000, timeframe_entrada: btTfEntrada, timeframe_macro: btTfMacro }));
+      const { job_id } = await api('/api/backtest/analista', BacktestStartSchema, post({ desde: btFrom.trim(), hasta: btTo.trim(), balance_inicial: Number(btBalance) || 10000 }));
       // eslint-disable-next-line no-constant-condition
       while (true) {
         await new Promise((r) => setTimeout(r, 800));
@@ -1790,119 +2373,224 @@ export default function App() {
       setBtRunning(false); setBtProgress(0);
     }
   }
-  if (loading) return <View style={styles.center}><ActivityIndicator color="#e4b75a" size="large" /><Text style={styles.muted}>Conectando con SpotPlus...</Text></View>;
-  return <View style={styles.screen}><StatusBar style="light" /><ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor="#e4b75a" />}><View style={styles.header}><View><Text style={styles.kicker}>TRADING CONTROL</Text><Text style={styles.title}>SpotPlus</Text></View><View style={[styles.connection, state?.conectado ? styles.online : styles.offline]}><View style={styles.dot} /><Text style={styles.connectionText}>{state?.conectado ? 'MT5 en línea' : 'MT5 sin conexión'}</Text></View></View>{message ? <Text style={styles.message}>{message}</Text> : null}{state?.error ? <Text style={styles.error}>{state.error}</Text> : null}
-  {state?.ultima_orden ? (
-    state.ultima_orden.ok
-      ? <Text style={[styles.message, { backgroundColor: '#183b2a', color: '#70e0a3' }]}>Última orden del bot: EJECUTADA · ticket {state.ultima_orden.ticket} · precio {state.ultima_orden.precio}</Text>
-      : <Text style={styles.error}>Última orden del bot RECHAZADA por MT5: {state.ultima_orden.error || 'sin detalle'}</Text>
-  ) : null}
-  <View style={styles.tabBar}>
-    {([['mercado', 'Mercado'], ['estrategia', 'Estrategia'], ['operar', 'Operar'], ['historial', 'Historial'], ['fundamentales', 'Fundamentales'], ['telegram', 'Telegram']] as const).map(([key, label]) => (
-      <Pressable key={key} onPress={() => setTab(key)} style={[styles.tabButton, tab === key && styles.tabButtonActive]}>
-        <Text style={[styles.tabButtonText, tab === key && styles.tabButtonTextActive]}>{label}</Text>
-      </Pressable>
-    ))}
-  </View>
+  if (loading) return <View style={styles.center}><ActivityIndicator color="#d7ae5b" size="large" /><Text style={styles.muted}>Conectando con SpotPlus...</Text></View>;
+  return (
+    <View style={styles.screen}>
+      <StatusBar style="light" />
+      <View style={[styles.appShell, useSidebar ? styles.appShellDesktop : null]}>
+        {useSidebar ? (
+          <View style={styles.sidebar}>
+            <View style={styles.brand}>
+              <View style={styles.brandMark}><Text style={styles.brandMarkText}>S</Text></View>
+              <View><Text style={styles.brandName}>SpotPlus</Text><Text style={styles.brandCaption}>TRADING DESK</Text></View>
+            </View>
+            <Text style={styles.navCaption}>ESPACIO DE TRABAJO</Text>
+            <View style={styles.navList}>
+              {NAV_ITEMS.map((item) => (
+                <Pressable
+                  key={item.key}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: tab === item.key }}
+                  onPress={() => setTab(item.key)}
+                  style={[styles.navButton, tab === item.key && styles.navButtonActive]}
+                >
+                  <View style={[styles.navIcon, tab === item.key && styles.navIconActive]}>
+                    <Text style={[styles.navIconText, tab === item.key && styles.navIconTextActive]}>{item.short}</Text>
+                  </View>
+                  <Text style={[styles.navLabel, tab === item.key && styles.navLabelActive]}>{item.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.sidebarFooter}>
+              <View style={[styles.statusIndicator, state?.conectado ? styles.statusIndicatorOnline : styles.statusIndicatorOffline]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sidebarStatusText}>{state?.conectado ? 'MT5 conectado' : 'MT5 desconectado'}</Text>
+                <Text style={styles.sidebarStatusSub}>{state?.config?.activo ? 'Bot activo' : 'Bot pausado'}</Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
+        <View style={styles.main}>
+          <ScrollView
+            contentContainerStyle={[
+              styles.contentGrid,
+              compactLayout ? styles.contentGridCompact : null,
+              useSidebar ? styles.contentGridDesktop : null,
+            ]}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor="#d7ae5b" />}
+          >
+            <View style={[styles.header, compactLayout && styles.headerCompact]}>
+              <View style={styles.titleGroup}>
+                <Text style={styles.kicker}>SPOTPLUS / CENTRO DE CONTROL</Text>
+                <Text style={[styles.title, compactLayout && styles.titleCompact]}>
+                  {tab === 'mercado' ? 'Resumen' : NAV_ITEMS.find((item) => item.key === tab)?.label}
+                </Text>
+              </View>
+              {account ? (
+                <View style={[styles.resumen, compactLayout && styles.resumenCompact]}>
+                  <View style={styles.resumenChip}><Text style={styles.muted}>BALANCE</Text><Text style={styles.resumenValor}>{Number(account.balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {account.moneda}</Text></View>
+                  <View style={styles.resumenChip}><Text style={styles.muted}>EQUIDAD</Text><Text style={styles.resumenValor}>{Number(account.equity).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {account.moneda}</Text></View>
+                  <View style={styles.resumenChip}><Text style={styles.muted}>FLOTANTE</Text><Text style={[styles.resumenValor, account.profit >= 0 ? styles.green : styles.red]}>{account.profit >= 0 ? '+' : ''}{Number(account.profit).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {account.moneda}</Text></View>
+                  <View style={styles.resumenChip}><Text style={styles.muted}>CUENTA</Text><Text style={styles.resumenValor}>{account.es_real ? 'REAL' : 'DEMO'}</Text></View>
+                </View>
+              ) : null}
+              {!useSidebar ? (
+                <View style={[styles.connection, state?.conectado ? styles.online : styles.offline]}>
+                  <View style={[styles.dot, state?.conectado ? styles.dotOnline : styles.dotOffline]} />
+                  <Text style={styles.connectionText}>{state?.conectado ? 'MT5 en línea' : 'MT5 sin conexión'}</Text>
+                </View>
+              ) : null}
+            </View>
+            {message ? <Text style={styles.message}>{message}</Text> : null}
+            {state?.error ? <Text style={styles.error}>{state.error}</Text> : null}
+            {!useSidebar ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll} contentContainerStyle={styles.tabBar}>
+                {NAV_ITEMS.map((item) => (
+                  <Pressable
+                    key={item.key}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: tab === item.key }}
+                    onPress={() => setTab(item.key)}
+                    style={[styles.tabButton, tab === item.key && styles.tabButtonActive]}
+                  >
+                    <Text style={[styles.tabButtonText, tab === item.key && styles.tabButtonTextActive]}>{item.label}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : null}
+  {tab === 'vivo' && <View style={{ width: '100%' }}><GraficoVivo apiUrl={API_URL} apiKey={API_KEY} simboloInicial={state?.config?.simbolo} /></View>}
   {tab === 'mercado' && <>
-  <Section title="Mercado">
-  {(() => {
-    const activo = state?.config?.activo ?? true;
-    const nombreEstrategia = state?.config?.estrategia_biblioteca_activa || state?.config?.estrategia;
-    const simboloActivo = state?.simbolo_actual || state?.config?.simbolo || '--';
-    if (activo && nombreEstrategia) {
-      return <View style={[styles.connection, styles.online, { alignSelf: 'flex-start', marginBottom: 14 }]}><View style={styles.dot} /><Text style={styles.connectionText}>Operando "{nombreEstrategia}" en {simboloActivo}</Text></View>;
-    }
-    if (!activo) {
-      return <View style={[styles.connection, styles.offline, { alignSelf: 'flex-start', marginBottom: 14 }]}><View style={[styles.dot, { backgroundColor: '#ff9999' }]} /><Text style={styles.connectionText}>Bot en pausa · sin operar {simboloActivo}</Text></View>;
-    }
-    return <View style={[styles.connection, styles.offline, { alignSelf: 'flex-start', marginBottom: 14 }]}><View style={[styles.dot, { backgroundColor: '#e4b75a' }]} /><Text style={styles.connectionText}>Sin estrategia activa en {simboloActivo}</Text></View>;
-  })()}
-  <View style={styles.market}><View><Text style={styles.muted}>SÍMBOLO ACTIVO</Text><Text style={styles.symbol}>{state?.simbolo_actual || state?.config?.simbolo || '--'}</Text></View><View style={styles.right}><Text style={styles.muted}>SEÑAL</Text><Text style={styles.signal}>{(state?.senal || 'sin señal').toUpperCase()}</Text></View></View><View style={styles.metrics}><Text style={styles.metric}>{state?.precio ? `${state.precio.bid} / ${state.precio.ask}` : '--'}</Text><Text style={styles.metric}>{state?.ultima_actualizacion || '--'}</Text></View></Section>
-  <Section title="Cuenta">{account ? <>{[['Balance', `${account.balance} ${account.moneda}`], ['Equidad', `${account.equity} ${account.moneda}`], ['Beneficio flotante', `${account.profit} ${account.moneda}`], ['Apalancamiento', `1:${account.apalancamiento}`]].map(([label, value]) => <View style={styles.row} key={label}><Text style={styles.label}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}<Text style={styles.foot}>Cuenta {account.cuenta} · {account.servidor} · {account.es_real ? 'REAL' : 'DEMO'}</Text></> : <Text style={styles.muted}>Cuenta no disponible</Text>}</Section>
+    <Section title="Activos en seguimiento">
+      <Text style={styles.explanation}>Instrumentos seleccionados para el análisis y la operativa.</Text>
+      {analistaWatchlist ? (
+        analistaWatchlist.operar.length ? (
+          <View style={styles.assetList}>
+            {analistaWatchlist.operar.map((item) => <View key={item} style={styles.assetChip}><Text style={styles.assetChipText}>{item}</Text></View>)}
+          </View>
+        ) : <View style={styles.emptyState}><Text style={styles.emptyTitle}>Sin activos seleccionados</Text><Text style={styles.explanation}>Agrega instrumentos desde Estrategia.</Text></View>
+      ) : <Text style={analistaWatchlistError ? styles.error : styles.muted}>{analistaWatchlistError || 'Cargando activos…'}</Text>}
+    </Section>
+    <Section title="Estado operativo">
+      <View style={styles.operationalRow}>
+        <Text style={styles.label}>CONEXIÓN MT5</Text>
+        <Text style={[styles.operationalValue, state?.conectado ? styles.green : styles.red]}>{state?.conectado ? 'En línea' : 'Sin conexión'}</Text>
+      </View>
+      <View style={styles.operationalRow}>
+        <Text style={styles.label}>BOT</Text>
+        <Text style={styles.operationalValue}>{state?.config?.activo ? 'Activo' : 'Pausado'}</Text>
+      </View>
+      <View style={styles.operationalRow}>
+        <Text style={styles.label}>POSICIONES ABIERTAS</Text>
+        <Text style={styles.operationalValue}>{positions.length}</Text>
+      </View>
+      {account ? <Text style={styles.foot}>{account.servidor} · Cuenta {account.es_real ? 'real' : 'demo'} · Apalancamiento 1:{account.apalancamiento}</Text> : <Text style={styles.foot}>Cuenta no disponible</Text>}
+      <Text style={styles.foot}>
+        {state?.config?.activo
+          ? analistaWatchlist?.ejecucion_activa
+            ? 'Ejecución automática configurada'
+            : 'Modo de avisos; no abre órdenes automáticamente'
+          : 'Bot pausado; no ejecuta órdenes automáticas'}
+      </Text>
+    </Section>
+    <Section wide title={`Posiciones abiertas · ${positions.length}`}>
+      {positions.length ? positions.slice(0, 6).map((item) => (
+        <View style={styles.position} key={item.ticket}>
+          <View style={styles.positionHeader}>
+            <Text style={[styles.badge, item.tipo === 'compra' ? styles.buyBadge : styles.sellBadge]}>{item.tipo.toUpperCase()}</Text>
+            <Text style={styles.positionName}>{item.simbolo} · {item.volumen} lotes</Text>
+            <Text style={[styles.positionProfit, item.profit >= 0 ? styles.green : styles.red]}>{item.profit >= 0 ? '+' : ''}{item.profit} {account?.moneda || ''}</Text>
+          </View>
+          <Text style={styles.muted}>Entrada {item.precio_apertura} · Actual {item.precio_actual}</Text>
+        </View>
+      )) : (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>No hay posiciones abiertas</Text>
+          <Text style={styles.explanation}>Cuando se abra una operación, aparecerá aquí con su dirección, activo y resultado flotante.</Text>
+        </View>
+      )}
+    </Section>
+    <Section wide title="Operaciones recientes">
+      {history.length ? history.slice(0, 5).map((item) => (
+        <View style={styles.position} key={item.ticket}>
+          <View style={styles.positionHeader}>
+            <Text style={[styles.badge, item.tipo === 'compra' ? styles.buyBadge : styles.sellBadge]}>{item.tipo.toUpperCase()}</Text>
+            <Text style={styles.positionName}>{item.simbolo} · {item.volumen} lotes</Text>
+            <Text style={[styles.positionProfit, item.profit >= 0 ? styles.green : styles.red]}>{item.profit >= 0 ? '+' : ''}{item.profit} {account?.moneda || ''}</Text>
+          </View>
+          <Text style={styles.muted}>Cerrada · {formatearHora12(item.hora)}</Text>
+        </View>
+      )) : <View style={styles.emptyState}><Text style={styles.emptyTitle}>Sin actividad reciente</Text><Text style={styles.explanation}>Las operaciones cerradas aparecerán aquí.</Text></View>}
+    </Section>
   </>}
+  {tab === 'proyecciones' && <Section wide title="Proyecciones SpotPlus">
+    <Text style={styles.explanation}>Aquí aparecen todos tus activos, las señales de la estrategia y las operaciones abiertas. En modo automático, SpotPlus solo opera con señal confirmada y las reglas del paso 9.</Text>
+    {proyecciones ? <>
+      <Text style={[styles.message, { backgroundColor: proyecciones.escaner.corriendo ? '#183b2a' : '#3a2024', color: proyecciones.escaner.corriendo ? '#70e0a3' : '#ff9999' }]}>
+        {proyecciones.escaner.corriendo
+          ? `Escáner activo · última vuelta hace ${proyecciones.escaner.hace_min ?? '—'} min`
+          : 'Escáner apagado o proyecciones vencidas; no se pueden ejecutar entradas.'}
+        {proyecciones.mt5_conectado
+          ? ` · Cuenta ${proyecciones.cuenta_real ? 'REAL' : 'DEMO'}${proyecciones.moneda ? ` (${proyecciones.moneda})` : ''}`
+          : ' · Cuenta MT5 no disponible'}
+      </Text>
+      <Text style={styles.explanation}>
+        {proyecciones.ejecucion_activa
+          ? (proyecciones.todas_las_proyecciones
+            ? 'Paso 9: AUTOMÁTICO · TODAS. El bot abre cada señal confirmada de todos tus activos. Aquí ves lo mismo con más detalle.'
+            : 'Paso 9: AUTOMÁTICO · SOLO MARCADOS. El bot abre las señales confirmadas de los activos marcados Operar; las demás las puedes enviar tú con el botón de cada señal.')
+          : 'Paso 9: SOLO AVISAR. SpotPlus no abre órdenes; puedes confirmar manualmente una señal válida.'}
+        {!proyecciones.manual_permitido ? ' La entrada manual está bloqueada hasta que el escáner y MT5 estén listos y la cuenta cumpla la regla de demo.' : ''}
+      </Text>
+      {proyecciones.activos.map((activo) => (
+        <View key={activo.simbolo} style={styles.saved}>
+          <View style={styles.positionHeader}>
+            <Text style={styles.savedTitle}>{activo.simbolo}</Text>
+            <Text style={styles.badge}>{activo.marcado_operar ? 'OPERAR' : 'SEGUIR'}</Text>
+          </View>
+          <Text style={styles.explanation}>{activo.detalle}</Text>
+          {activo.escenarios.length ? activo.escenarios.map((escenario) => {
+            const compra = escenario.direccion === 'alcista';
+            const id = `${activo.simbolo}:${escenario.clave}`;
+            return <View key={escenario.clave} style={styles.position}>
+              <Text style={[styles.badge, compra ? styles.buyBadge : styles.sellBadge]}>{compra ? 'COMPRA' : 'VENTA'} · {escenario.estado.toUpperCase()}</Text>
+              <Text style={styles.explanation}>Zona {escenario.zona} · {escenario.zona_tf} ({escenario.zona_rango[0]}–{escenario.zona_rango[1]}) · {escenario.fuerza_rompimiento}</Text>
+              <Text style={styles.muted}>Entrada ref. {escenario.entrada} · SL {escenario.sl} · Alineación {Math.round(escenario.alineacion * 100)}% · Confluencias {escenario.score}</Text>
+              {escenario.operaciones.map((op) => {
+                const lote = escenario.lotes.find((item) => item.operacion === op.nombre);
+                return <Text key={op.nombre} style={styles.muted}>{op.nombre}: lote {lote?.lote ?? '—'} · TP {op.tp} · R:R {op.rr}</Text>;
+              })}
+              {escenario.confluencias.length ? <Text style={styles.muted}>Motivos: {escenario.confluencias.join(', ')}</Text> : null}
+              {escenario.notas.map((nota) => <Text key={nota} style={styles.muted}>{nota}</Text>)}
+              {escenario.en_curso ? <Text style={[styles.badge, styles.buyBadge]}>OPERACIÓN ABIERTA AHORA EN MT5</Text> : escenario.ejecutada ? <Text style={[styles.badge, styles.sellBadge]}>EJECUTADA ANTES · ESTA SEÑAL NO APARECE ABIERTA EN MT5</Text> : null}
+              {proyecciones.manual_permitido && !escenario.ejecutada && escenario.estado === 'confirmada'
+                ? <Button label={proyeccionOcupada === id ? 'Enviando orden…' : `Operar ${compra ? 'COMPRA' : 'VENTA'} manual`} onPress={() => !proyeccionOcupada && confirmarOperacionProyeccion(activo.simbolo, escenario.clave, escenario)} color="#237a4b" />
+                : null}
+            </View>;
+          }) : <Text style={activo.estado === 'sin_datos' ? styles.error : styles.muted}>{activo.estado === 'sin_datos' || activo.estado === 'pendiente'
+            ? activo.detalle
+            : proyecciones.escaner.corriendo
+              ? 'Sin oportunidad por ahora; SpotPlus vuelve a evaluar al cerrar la siguiente vela.'
+              : 'No hay una proyección vigente; espera a que el escáner vuelva a ejecutarse.'}</Text>}
+          {activo.posiciones.length ? <>
+            <Text style={styles.subTitle}>OPERACIONES ABIERTAS</Text>
+            {activo.posiciones.map((posicion) => <View key={posicion.ticket} style={styles.position}>
+              <Text style={styles.value}>{posicion.tipo.toUpperCase()} · {posicion.volumen} lotes · Ticket {posicion.ticket}</Text>
+              <Text style={styles.muted}>Entrada {posicion.precio_apertura} · Actual {posicion.precio_actual} · SL {posicion.sl || '—'} · TP {posicion.tp || '—'}</Text>
+              <Text style={[styles.value, posicion.profit >= 0 ? styles.green : styles.red]}>Avance flotante: {posicion.profit.toFixed(2)} {proyecciones.moneda || ''}</Text>
+            </View>)}
+          </> : null}
+        </View>
+      ))}
+    </> : <Text style={styles.muted}>Cargando proyecciones…</Text>}
+    {proyeccionesMensaje ? <Text style={[styles.message, { backgroundColor: '#183b2a', color: '#70e0a3' }]}>{proyeccionesMensaje}</Text> : null}
+    {proyeccionesError ? <Text style={styles.error}>{proyeccionesError}</Text> : null}
+    <Button label="Actualizar proyecciones" onPress={cargarProyecciones} color="#303b48" />
+  </Section>}
   {tab === 'estrategia' && <>
-  <Section title="Control del bot"><Field label="SÍMBOLO ACTIVO" value={symbol} onChangeText={setSymbol} /><Field label="ACTIVOS PERMITIDOS (separados por coma)" value={simbolosPermitidos} onChangeText={setSimbolosPermitidos} /><View style={styles.rowButtons}><Button label="Guardar símbolo" onPress={() => run('/api/config', { simbolo: symbol.trim().toUpperCase(), simbolos_permitidos: simbolosPermitidos.split(',').map((s: string) => s.trim()).filter(Boolean).map((s: string) => s.toUpperCase()) }, 'Símbolo y activos guardados')} color="#b88b35" /><Button label={state?.config?.activo ? 'Pausar bot' : 'Reanudar bot'} onPress={() => run('/api/config', { activo: !(state?.config?.activo ?? true) }, 'Estado actualizado')} /></View></Section>
-  <Section title="Dirección y protección multi-temporalidad">
-    <Text style={styles.explanation}>En modo escáner, los marcos seleccionados se clasifican como micro (confirma), intermedia/macro (buscan zonas) y extra macro (contexto). En modo manual se usa la entrada y macro configuradas. Si cambia el sesgo macro, recibirás un aviso; las posiciones ganadoras en contra pueden protegerse moviendo el SL a BE.</Text>
-    <Text style={styles.codeSummary}>Sesgo del marco alto: {state?.sesgo_macro || 'sin confirmar'} · {state?.config?.temporalidades_escaneo?.length ? `Escaneo ${state.config.temporalidades_escaneo.join(', ')}` : `Entrada ${state?.config?.timeframe_entrada || 'M15'} · Macro ${state?.config?.timeframe_macro || 'H1'}`}</Text>
-    <Text style={styles.codeSummary}>Estructura por marco: {Object.entries(state?.contexto_estructura?.temporalidades || {}).map(([tf, contexto]) => `${tf} ${contexto.sesgo || 'sin sesgo'}${contexto.acumulacion ? ' · acumulación' : ''}`).join(' · ') || 'esperando velas'}</Text>
-    <Text style={[styles.subTitle, { marginTop: 14 }]}>Temporalidades del escáner activo</Text>
-    <Text style={styles.explanation}>Para una estrategia guardada que use el escáner SpotPlus, se consultan exclusivamente los marcos seleccionados. En cada marco se buscan todas las oportunidades válidas; los roles micro/intermedia/macro determinan si confirma, busca zona o aporta contexto. Si desactivas el escáner, se usa el modo manual de entrada/macro. El motor clásico "estructura dinámica" siempre usa esos dos marcos manuales.</Text>
-    <View style={styles.rowButtons}>
-      <Button
-        label="Escanear todas"
-        onPress={() => guardarTemporalidadesActivas(TEMPORALIDADES_ESCANEO)}
-        color={new Set((state?.config?.temporalidades_escaneo || []).map((tf) => tf.toUpperCase())).size === TEMPORALIDADES_ESCANEO.length ? '#237a4b' : '#303b48'}
-      />
-      <Button
-        label="Modo manual"
-        onPress={() => guardarTemporalidadesActivas([])}
-        color={!state?.config?.temporalidades_escaneo?.length ? '#b88b35' : '#303b48'}
-      />
-    </View>
-    <View style={styles.rowButtons}>
-      {TEMPORALIDADES_ESCANEO.map((timeframe) => {
-        const actuales = (state?.config?.temporalidades_escaneo || []).map((tf) => tf.toUpperCase());
-        const activada = actuales.includes(timeframe);
-        return (
-          <Button
-            key={timeframe}
-            label={timeframe}
-            onPress={() => {
-              guardarTemporalidadesActivas(
-                actuales.includes(timeframe)
-                  ? actuales.filter((tf) => tf !== timeframe)
-                  : [...actuales, timeframe],
-              );
-            }}
-            color={activada ? '#b88b35' : '#303b48'}
-          />
-        );
-      })}
-    </View>
-    {state?.contexto_estructura?.conflictos.map((conflicto) => <Text key={`${conflicto.mayor}-${conflicto.menor}`} style={styles.explanation}>Conflicto: {conflicto.mayor} {conflicto.sesgo_mayor} vs {conflicto.menor} {conflicto.sesgo_menor}; el escáner prioriza el marco mayor.</Text>)}
-    <View style={styles.rowButtons}>
-      <Button label={state?.config?.filtro_sesgo_macro ? 'Filtro macro: ACTIVADO' : 'Filtro macro: desactivado'} onPress={() => run('/api/config', { filtro_sesgo_macro: !(state?.config?.filtro_sesgo_macro ?? false) }, 'Filtro de sesgo actualizado')} color={state?.config?.filtro_sesgo_macro ? '#237a4b' : '#303b48'} />
-      <Button label={state?.config?.aviso_cambio_direccion ? 'Avisos: ACTIVADOS' : 'Avisos: desactivados'} onPress={() => run('/api/config', { aviso_cambio_direccion: !(state?.config?.aviso_cambio_direccion ?? true) }, 'Avisos de dirección actualizados')} color={state?.config?.aviso_cambio_direccion ? '#237a4b' : '#303b48'} />
-      <Button label={state?.config?.proteger_cambio_direccion ? 'BE por cambio: ACTIVADO' : 'BE por cambio: desactivado'} onPress={() => run('/api/config', { proteger_cambio_direccion: !(state?.config?.proteger_cambio_direccion ?? true) }, 'Protección por dirección actualizada')} color={state?.config?.proteger_cambio_direccion ? '#237a4b' : '#303b48'} />
-    </View>
-    <Text style={[styles.subTitle, { marginTop: 14 }]}>BE dinámico (Fibo + nueva estructura + alineación)</Text>
-    <Text style={styles.explanation}>Protege la operación a BE si se cumple CUALQUIERA de estas tres: el precio llega al nivel de Fibonacci del tramo de entrada, se confirma una nueva estructura a favor en una temporalidad micro, o se pierde la alineación entre la macro y la intermedia que sostenía la operación.</Text>
-    <View style={styles.rowButtons}>
-      <Button label={state?.config?.be_dinamico_activo ? 'BE dinámico: ACTIVADO' : 'BE dinámico: desactivado'} onPress={() => run('/api/config', { be_dinamico_activo: !(state?.config?.be_dinamico_activo ?? false) }, 'BE dinámico actualizado')} color={state?.config?.be_dinamico_activo ? '#237a4b' : '#303b48'} />
-    </View>
-    <View style={styles.rowButtons}>
-      <Field label="NIVEL DE FIBONACCI (ej. 0.5 = 50%)" value={beDinamicoFiboNivel} onChangeText={setBeDinamicoFiboNivel} numeric />
-      <Field label="COLCHÓN BE EN CASCADA (% de la distancia al SL)" value={beCascadaBufferPct} onChangeText={setBeCascadaBufferPct} numeric />
-    </View>
-    <Field label="GRUPOS DE TEMPORALIDAD (ej. M15:macro, H1:intermedia, M5:micro)" value={gruposTemporalidadTexto} onChangeText={setGruposTemporalidadTexto} />
-    <Text style={styles.explanation}>Es el mismo ajuste que puedes cambiar con botones en "Agregar estrategia → Rol de cada grupo en el escaneo"; aquí puedes escribirlo directo si prefieres. Por defecto: M1/M3/M5 = micro, M15/M30/H1 = intermedia, H2/H4/D1 = macro. Escribe aquí solo las que quieras cambiar; el resto se queda como está.</Text>
-    <Button label="Guardar BE dinámico y grupos" onPress={() => {
-      const grupos: Record<string, string> = {};
-      gruposTemporalidadTexto.split(',').map((par) => par.trim()).filter(Boolean).forEach((par) => {
-        const [tf, grupo] = par.split(':').map((x) => x.trim());
-        if (tf && grupo) grupos[tf.toUpperCase()] = grupo.toLowerCase();
-      });
-      run('/api/config', {
-        be_dinamico_fibo_nivel: Number(beDinamicoFiboNivel) || 0.5,
-        be_cascada_buffer_pct: Number(beCascadaBufferPct) || 0,
-        grupos_temporalidad: grupos,
-      }, 'BE dinámico y grupos guardados');
-    }} color="#b88b35" />
-  </Section>
-  <Section title="Circuit breaker y spread">
-    <Text style={styles.explanation}>Si la pérdida del día llega al % configurado, el bot deja de abrir operaciones nuevas hasta mañana (las que ya están abiertas siguen con su SL/TP normal). El límite de spread evita que el bot abra justo cuando el spread se dispara por una noticia.</Text>
-    {state?.circuito_disparado ? <Text style={styles.error}>🛑 Circuit breaker activado: el bot no abrirá operaciones nuevas hoy.</Text> : null}
-    <View style={styles.rowButtons}><Button label={state?.config?.circuito_perdida_diaria_activo ? 'Circuit breaker: ACTIVADO' : 'Circuit breaker: desactivado'} onPress={() => run('/api/config', { circuito_perdida_diaria_activo: !(state?.config?.circuito_perdida_diaria_activo ?? false) }, 'Circuit breaker actualizado')} color={state?.config?.circuito_perdida_diaria_activo ? '#237a4b' : '#303b48'} /></View>
-    <View style={styles.rowButtons}>
-      <Field label="PÉRDIDA DIARIA MÁXIMA (% del balance)" value={perdidaDiariaPct} onChangeText={setPerdidaDiariaPct} numeric />
-      <Field label="SPREAD MÁXIMO (puntos, 0 = sin límite)" value={spreadMaximo} onChangeText={setSpreadMaximo} numeric />
-    </View>
-    <Field label="MÁX. OPERACIONES ABIERTAS POR SÍMBOLO (0 = ilimitadas)" value={maxOperaciones} onChangeText={setMaxOperaciones} numeric />
-    <Text style={styles.explanation}>Por defecto es 1: evita que una misma señal abra varias operaciones seguidas. La temporalidad de entrada y la macro de la estrategia activa se mantienen aunque MT5 muestre otro gráfico.</Text>
-    <Button label="Guardar límites" onPress={() => run('/api/config', { circuito_perdida_diaria_pct: Number(perdidaDiariaPct) || 0, spread_maximo_puntos: Number(spreadMaximo) || 0, max_operaciones_por_simbolo: Math.max(0, Math.floor(Number(maxOperaciones) || 0)) }, 'Límites guardados')} color="#b88b35" />
-  </Section>
+    <ListaActivos apiUrl={API_URL} apiKey={API_KEY} />
+    <PanelAnalista apiUrl={API_URL} apiKey={API_KEY} />
+  {false && <>
+  <Section title="Bot"><View style={styles.rowButtons}><Button label={state?.config?.activo ? 'Pausar bot' : 'Reanudar bot'} onPress={() => run('/api/config', { activo: !(state?.config?.activo ?? true) }, 'Estado actualizado')} /></View></Section>
   <Section title="Estrategias guardadas">
     {!formAbierto ? <Button label="+ Agregar estrategia nueva" onPress={nuevaEstrategiaEnBlanco} color="#2563eb" /> : null}
     <Modal visible={formAbierto} animationType="slide" onRequestClose={resetFormularioEstrategia}>
@@ -2058,20 +2746,24 @@ export default function App() {
       const estaActiva = state?.config?.estrategia_biblioteca_activa === item.nombre;
       return <View style={styles.saved} key={item.nombre}><Text style={styles.savedTitle}>{item.nombre}</Text><Text style={styles.explanation}>{item.explicacion || 'Sin descripción'}</Text><Text style={styles.codeSummary}>Volumen: {item.volumen} lotes · SL {item.sl} · TP {item.tp}</Text><Text style={styles.codeSummary}>Entrada: {item.timeframe_entrada || 'M15'} · Macro: {item.timeframe_macro || 'H1'} · Usa macro: {item.usa_multi_temporalidad ? 'sí' : 'no'}</Text><View style={styles.rowButtons}><Button label={estaActiva ? 'Desactivar' : 'Activar'} onPress={() => estaActiva ? run('/api/estrategia/reset_total', {}, `${item.nombre} desactivada`) : run(`/api/estrategias_guardadas/activar/${encodeURIComponent(item.nombre)}`, {}, `${item.nombre} activada`)} color={estaActiva ? '#8a2c2c' : '#237a4b'} /><Button label="Ver código" onPress={() => exportarGuardada(item)} color="#2563eb" /><Button label="Editar" onPress={() => editarGuardada(item)} color="#b88b35" /><Button label="Borrar" onPress={() => run(`/api/estrategias_guardadas/${encodeURIComponent(item.nombre)}`, {}, `${item.nombre} borrada`, 'DELETE')} /></View></View>;
     })}
-    {state?.config?.estrategia_biblioteca_activa ? <Text style={[styles.foot, { marginTop: 8 }]}>Activa: {state.config.estrategia_biblioteca_activa}</Text> : null}
+    {state?.config?.estrategia_biblioteca_activa ? <Text style={[styles.foot, { marginTop: 8 }]}>Activa: {state?.config?.estrategia_biblioteca_activa}</Text> : null}
   </Section>
-  <Section title="Backtesting"><Text style={styles.explanation}>Simula, vela por vela y sin mirar al futuro, cómo se habría comportado la estrategia ACTIVA del bot en un rango de fechas pasado, usando velas reales de MT5.</Text><View style={styles.rowButtons}><DateField label="DESDE" value={btFrom} onChangeText={setBtFrom} /><DateField label="HASTA" value={btTo} onChangeText={setBtTo} /></View><View style={styles.rowButtons}><TimeframeSelector label="MICRO / ENTRADA" value={btTfEntrada} onChange={setBtTfEntrada} /><TimeframeSelector label="MACRO" value={btTfMacro} onChange={setBtTfMacro} /></View><Text style={styles.explanation}>Micro define las velas donde se buscan entradas; Macro se usa para el movimiento de fondo y el TP. Solo afecta este backtest.</Text><Field label="BALANCE INICIAL" value={btBalance} onChangeText={setBtBalance} numeric /><Button label={btRunning ? `Simulando... ${btProgress.toFixed(0)}%` : 'Correr backtest'} onPress={runBacktest} color="#2563eb" />
+  </>}
+  </>}
+  {tab === 'backtesting' && <>
+  <Section wide title="Backtesting SpotPlus"><Text style={styles.explanation}>Es una simulación histórica, no son operaciones reales ni envía órdenes a MT5. No modela spread, comisión, swap ni deslizamiento del broker; solo representa gaps si una vela abre más allá del SL. Elige fechas disponibles en formato AAAA-MM-DD.</Text><View style={styles.rowButtons}><DateField label="DESDE" value={btFrom} onChangeText={setBtFrom} minDate={btDateRange?.desde} maxDate={btDateRange ? (btTo < btDateRange.hasta ? btTo : btDateRange.hasta) : undefined} disabled={!btDateRange} /><DateField label="HASTA" value={btTo} onChangeText={setBtTo} minDate={btDateRange ? (btFrom > btDateRange.desde ? btFrom : btDateRange.desde) : undefined} maxDate={btDateRange?.hasta} disabled={!btDateRange} /></View>{btDateError ? <Text style={styles.error}>{btDateError}</Text> : !btDateRange ? <Text style={styles.explanation}>Buscando las fechas con datos históricos disponibles...</Text> : <Text style={styles.explanation}>Datos disponibles: {btDateRange.desde} a {btDateRange.hasta}.</Text>}<Text style={styles.explanation}>Los precios históricos se obtienen de MetaTrader 5 y se completan con archivos CSV locales cuando hace falta. El lote se estima con el balance, el riesgo configurado y las especificaciones del símbolo disponibles; si MT5 no devuelve esos datos, el resultado avisa que son aproximados.</Text><Text style={styles.explanation}>El replay inicia en la temporalidad que requiere el intervalo de escaneo. Puedes cambiar el marco visible dentro del gráfico; las marcas muestran señales y operaciones simuladas conforme avanza.</Text><Field label="BALANCE INICIAL" value={btBalance} onChangeText={setBtBalance} numeric /><Button label={btRunning ? `Simulando... ${btProgress.toFixed(0)}%` : 'Correr backtest de SpotPlus'} onPress={runBacktest} color="#2563eb" />
   {btRunning ? <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${btProgress}%` }]} /></View> : null}
   {btResult && 'error' in btResult ? <Text style={styles.error}>{btResult.error}</Text> : null}
   {btResult && !('error' in btResult) ? <View style={styles.saved}>
     <Text style={styles.savedTitle}>{btResult.simbolo} · {btResult.desde} → {btResult.hasta}</Text>
     <View style={styles.row}><Text style={styles.label}>Balance final</Text><Text style={styles.value}>{btResult.balance_final} (inicial {btResult.balance_inicial})</Text></View>
     <View style={styles.row}><Text style={styles.label}>Ganancia total</Text><Text style={[styles.value, btResult.profit_total >= 0 ? styles.green : styles.red]}>{btResult.profit_total}</Text></View>
-    <View style={styles.row}><Text style={styles.label}>Operaciones</Text><Text style={styles.value}>{btResult.total_operaciones} ({btResult.ganadoras} ganadoras / {btResult.perdedoras} perdedoras)</Text></View>
-    <View style={styles.row}><Text style={styles.label}>Tasa de acierto</Text><Text style={styles.value}>{btResult.tasa_acierto}%</Text></View>
+    <View style={styles.row}><Text style={styles.label}>Operaciones cerradas simuladas</Text><Text style={styles.value}>{btResult.total_operaciones} ({btResult.ganadoras} ganadoras / {btResult.perdedoras} perdedoras / {btResult.neutras ?? 0} break-even)</Text></View>
+    <View style={styles.row}><Text style={styles.label}>Acierto sobre cerradas</Text><Text style={styles.value}>{btResult.tasa_acierto}%</Text></View>
     <View style={styles.row}><Text style={styles.label}>Drawdown máximo</Text><Text style={styles.value}>{btResult.max_drawdown}</Text></View>
-    {btResult.posicion_abierta_al_final ? <View style={styles.position}><Text style={styles.value}>POSICIÓN ABIERTA AL FINAL DEL PERIODO · {btResult.posicion_abierta_al_final.tipo.toUpperCase()} · {btResult.posicion_abierta_al_final.entrada}</Text><Text style={styles.muted}>No cuenta como operación cerrada</Text></View> : null}
-    <Text style={styles.foot}>{btResult.velas_usadas} velas simuladas · Entrada {btResult.timeframe_entrada || btTfEntrada} · Macro {btResult.timeframe_macro || btTfMacro}</Text>
+    {btResult.posicion_abierta_al_final ? <View style={styles.position}><Text style={styles.value}>{btResult.posiciones_abiertas?.length || 1} POSICIÓN(ES) ABIERTA(S) AL FINAL · {btResult.posicion_abierta_al_final.tipo.toUpperCase()} · {btResult.posicion_abierta_al_final.entrada}</Text><Text style={styles.muted}>Flotante {btResult.posicion_abierta_al_final.profit_flotante ?? 0} · riesgo inicial {btResult.posicion_abierta_al_final.riesgo_real ?? '—'} / tope {btResult.posicion_abierta_al_final.riesgo_objetivo ?? '—'} · riesgo actual al SL {btResult.posicion_abierta_al_final.riesgo_actual ?? '—'} · No cuenta como operación cerrada</Text></View> : null}
+    <Text style={styles.foot}>{btResult.velas_usadas} velas simuladas · Temporalidad evaluada {btResult.timeframe_entrada || '—'}</Text>
+    {btResult.aviso ? <Text style={styles.foot}>{btResult.aviso}</Text> : null}
     {btResult.diagnostico ? <View style={styles.position}>
       <Text style={styles.subTitle}>DIAGNÓSTICO DE ESTRATEGIA</Text>
       <Text style={styles.muted}>Activa: {btResult.diagnostico.estrategia_activa} · {btResult.diagnostico.tipo_estrategia}</Text>
@@ -2079,20 +2771,35 @@ export default function App() {
       <Text style={styles.muted}>Marcos recibidos: {btResult.diagnostico.timeframes_recibidos.join(', ') || 'ninguno'}</Text>
       {btResult.diagnostico.timeframes_faltantes.length ? <Text style={styles.red}>Falta histórico para: {btResult.diagnostico.timeframes_faltantes.join(', ')}</Text> : null}
       <Text style={styles.muted}>Evaluaciones: {btResult.diagnostico.evaluaciones_estrategia} · Señales: {btResult.diagnostico.senales_detectadas} · Oportunidades: {btResult.diagnostico.oportunidades_detectadas}</Text>
-      <Text style={styles.muted}>Entradas ejecutadas: {btResult.diagnostico.entradas_ejecutadas} · Señales repetidas ignoradas: {btResult.diagnostico.senales_ignoradas_misma_direccion}</Text>
+      <Text style={styles.muted}>Entradas simuladas: {btResult.diagnostico.entradas_ejecutadas} · Señales repetidas ignoradas: {btResult.diagnostico.senales_ignoradas_misma_direccion}</Text>
       {btResult.diagnostico.senales_detectadas === 0 ? <Text style={styles.foot}>{btResult.diagnostico.tipo_estrategia === 'ninguna' ? 'No hay una estrategia activa configurada para este backtest.' : `La estrategia se evaluó ${btResult.diagnostico.evaluaciones_estrategia} veces, pero no emitió señales de compra/venta en este rango.`}</Text> : null}
     </View> : null}
     <Button label="▶ Ver replay visual" onPress={() => setBtShowReplay(true)} color="#b88b35" />
+    <Button label={btDisenoNuevo ? 'Diseño NUEVO · estructura por lentes · toca para anterior' : 'Diseño ANTERIOR · toca para nuevo'} onPress={() => setBtDisenoNuevo((v) => !v)} color="#303b48" />
     {btResult.operaciones.length ? <Text style={[styles.subTitle, { marginTop: 14 }]}>ÚLTIMAS OPERACIONES</Text> : null}
     {btResult.operaciones.slice(-15).reverse().map((t, i) => {
       const motivo = t.motivo_cierre || (t.be_aplicado && t.salida === t.entrada ? 'be' : t.salida === t.sl ? 'sl' : t.salida === t.tp ? 'tp' : 'cierre');
       const etiquetaMotivo = motivo === 'sl' ? 'STOP LOSS' : motivo === 'tp' ? 'TAKE PROFIT' : motivo === 'be' ? 'BREAKEVEN' : 'CIERRE';
-      return <View style={styles.position} key={`${t.hora_cierre}-${i}`}><Text style={styles.value}>{t.tipo.toUpperCase()} · {t.entrada} → {t.salida} · {t.volumen} lotes</Text><Text style={[styles.muted, motivo === 'tp' || motivo === 'be' ? styles.green : styles.red]}>{etiquetaMotivo} · {t.profit >= 0 ? '+' : ''}{t.profit} · {t.hora_cierre}</Text></View>;
+      return <View style={styles.position} key={`${t.hora_cierre}-${i}`}><Text style={styles.value}>{t.tipo.toUpperCase()} · {t.entrada} → {t.salida} · {t.volumen} lotes</Text><Text style={[styles.muted, motivo === 'tp' || motivo === 'be' ? styles.green : styles.red]}>{etiquetaMotivo} · {t.profit >= 0 ? '+' : ''}{t.profit} · {t.hora_cierre}</Text><Text style={styles.muted}>Riesgo real {t.riesgo_real ?? '—'} / riesgo configurado {t.riesgo_objetivo ?? '—'}</Text></View>;
     })}
   </View> : null}
   </Section>
   {btShowReplay && btResult && !('error' in btResult) ? (
-    <ReplayBacktest velas={btResult.velas} operaciones={btResult.operaciones} diagnostico={btResult.diagnostico} simbolo={btResult.simbolo} desde={btResult.desde} hasta={btResult.hasta} indiceInicio={btResult.indice_inicio_replay} timeframeEntrada={btResult.timeframe_entrada || btTfEntrada} timeframeMacro={btResult.timeframe_macro || btTfMacro} onClose={() => setBtShowReplay(false)} />
+    btDisenoNuevo ? (
+      <GraficoReplay velas={btResult.velas} operaciones={btResult.operaciones} posicionesAbiertas={btResult.posiciones_abiertas || []} valorPorUnidadLote={btResult.valor_por_unidad_lote || 0} simbolo={btResult.simbolo} desde={btResult.desde} hasta={btResult.hasta} indiceInicio={btResult.indice_inicio_replay} timeframeBase={btResult.timeframe_entrada || 'M5'} onClose={() => setBtShowReplay(false)}
+        cargarVelas={async (tfx) => {
+          const q = new URLSearchParams({ desde: btResult.desde, hasta: btResult.hasta, timeframe: tfx, simbolo: btResult.simbolo });
+          const res = await api(`/api/backtest/velas?${q.toString()}`, ReplayVelasResponseSchema);
+          if ('error' in res) throw new Error(res.error);
+          return res.velas;
+        }}
+        cargarLentes={async () => {
+          const q = new URLSearchParams({ desde: btResult.desde, hasta: btResult.hasta, simbolo: btResult.simbolo });
+          return api(`/api/backtest/lentes?${q.toString()}`, LentesReplaySchema);
+        }} />
+    ) : (
+    <ReplayBacktest velas={btResult.velas} operaciones={btResult.operaciones} pasosEstrategia={btResult.pasos_estrategia} diagnostico={btResult.diagnostico} simbolo={btResult.simbolo} desde={btResult.desde} hasta={btResult.hasta} indiceInicio={btResult.indice_inicio_replay} timeframeEntrada={btResult.timeframe_entrada || 'M5'} timeframeMacro={btResult.timeframe_macro} onClose={() => setBtShowReplay(false)} />
+    )
   ) : null}
   </>}
   {tab === 'operar' && <>
@@ -2100,11 +2807,43 @@ export default function App() {
   <Section title={`Posiciones abiertas (${positions.length})`}>{positions.length ? positions.map((item) => <Pressable style={styles.position} key={item.ticket} onPress={() => setPosicionSeleccionada(item)}><View style={styles.positionHeader}><Text style={[styles.badge, item.tipo === 'compra' ? styles.buyBadge : styles.sellBadge]}>{item.tipo.toUpperCase()}</Text><Text style={styles.positionName}>{item.simbolo} · {item.volumen} lotes</Text><Pressable onPress={() => run(`/api/cerrar/${item.ticket}`, {}, 'Posición cerrada')}><Text style={styles.close}>Cerrar</Text></Pressable></View><Text style={styles.muted}>Apertura {item.precio_apertura} · Actual {item.precio_actual} · P/L real: {item.profit} {account?.moneda || ''}</Text><Text style={styles.foot}>Toca para ver el motivo y contexto</Text></Pressable>) : <Text style={styles.muted}>Sin posiciones abiertas. Si el bot dice "CONFIRMADA — YA EJECUTADA" y aquí no aparece nada, revisa el mensaje de "Última orden del bot" arriba — seguro MT5 la rechazó (volumen mínimo, stops muy cerca, símbolo no visible, etc).</Text>}</Section>
   {posicionSeleccionada ? <Modal visible transparent animationType="slide" onRequestClose={() => setPosicionSeleccionada(null)}><Pressable style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.7)', justifyContent: 'center', padding: 20 }} onPress={() => setPosicionSeleccionada(null)}><Pressable style={{ backgroundColor: '#151b23', borderWidth: 1, borderColor: '#33404d', borderRadius: 8, padding: 18, maxWidth: 600, width: '100%', alignSelf: 'center' }} onPress={(event) => event.stopPropagation()}><Text style={styles.savedTitle}>Detalle de operación · {posicionSeleccionada.ticket}</Text><Text style={styles.explanation}>MT5 informa que esta operación está abierta. Entrada: {posicionSeleccionada.tipo.toUpperCase()} a {posicionSeleccionada.precio_apertura} · Precio actual: {posicionSeleccionada.precio_actual} · P/L: {posicionSeleccionada.profit} {account?.moneda || ''}</Text><Text style={styles.muted}>Abierta: {formatearHora12(posicionSeleccionada.hora_apertura)}</Text><Text style={styles.label}>CONTEXTO DE LA ESTRATEGIA</Text><Text style={styles.explanation}>Micro / entrada: {state?.config?.timeframe_entrada || 'no disponible'} · Macro: {state?.config?.timeframe_macro || 'no disponible'}</Text>{state?.ultima_orden && !state.ultima_orden.ok ? <Text style={styles.error}>Último intento rechazado por MT5: {state.ultima_orden.error || 'sin detalle'}</Text> : null}<Button label="Cerrar detalle" onPress={() => setPosicionSeleccionada(null)} color="#8a2c2c" /></Pressable></Pressable></Modal> : null}
   </>}
+  {tab === 'riesgo' && <>
+  <Section title="Gestión de riesgo · acciones manuales">
+    <Text style={styles.explanation}>Estas acciones no se ejecutan automáticamente. Elige un símbolo y BUY o SELL; el servidor vuelve a filtrar las posiciones abiertas antes de operar. No cambian la regla automática de BE basada en estructura macro/micro.</Text>
+    <Text style={styles.label}>SÍMBOLO</Text>
+    {groupSymbols.length ? <View style={styles.rowButtons}>{groupSymbols.map((item) => <Button key={item} label={item} onPress={() => setGroupSymbol(item)} color={groupSymbol === item ? '#b88b35' : '#303b48'} />)}</View> : <Text style={styles.muted}>No hay posiciones abiertas para seleccionar un símbolo.</Text>}
+    <Text style={styles.label}>DIRECCIÓN</Text>
+    <View style={styles.rowButtons}>
+      <Button label="BUY" onPress={() => setGroupSide('compra')} color={groupSide === 'compra' ? '#237a4b' : '#303b48'} />
+      <Button label="SELL" onPress={() => setGroupSide('venta')} color={groupSide === 'venta' ? '#a84343' : '#303b48'} />
+    </View>
+    <Text style={styles.explanation}>Coincidencias actuales: {groupPositions.length} posición(es) · {groupPositions.reduce((sum, item) => sum + item.volumen, 0).toFixed(2)} lotes.</Text>
+    <Field label="COLCHÓN PARA SL A BE (puntos del símbolo, mayor que cero)" value={groupBuffer} onChangeText={setGroupBuffer} numeric placeholder="Ej. 20" />
+    <Text style={styles.muted}>El SL se calcula desde el precio de entrada, añadiendo el colchón para BUY o restándolo para SELL. No calcula ni garantiza cubrir comisión, swap o spread: consulta los costos de tu bróker. Si el mercado o el SL actual no permiten mejorar la protección, esa posición se omitirá y se explicará.</Text>
+    <View style={styles.rowButtons}>
+      <Button label={groupBusy ? 'Procesando...' : 'Mover SL de todas a BE + colchón'} onPress={() => confirmGroupAction('mover_sl')} color="#b88b35" />
+      <Button label={groupBusy ? 'Procesando...' : 'Cerrar todas las seleccionadas'} onPress={() => confirmGroupAction('cerrar')} color="#8a2c2c" />
+    </View>
+    {groupResult ? <Text style={groupResult.ok ? styles.message : styles.error}>{groupResult.text}</Text> : null}
+  </Section>
+  <Section title="Circuit breaker y spread">
+    <Text style={styles.explanation}>Si la pérdida del día llega al % configurado, el bot deja de abrir operaciones nuevas hasta mañana (las que ya están abiertas siguen con su SL/TP normal). El límite de spread evita que el bot abra justo cuando el spread se dispara por una noticia.</Text>
+    {state?.circuito_disparado ? <Text style={styles.error}>🛑 Circuit breaker activado: el bot no abrirá operaciones nuevas hoy.</Text> : null}
+    <View style={styles.rowButtons}><Button label={state?.config?.circuito_perdida_diaria_activo ? 'Circuit breaker: ACTIVADO' : 'Circuit breaker: desactivado'} onPress={() => run('/api/config', { circuito_perdida_diaria_activo: !(state?.config?.circuito_perdida_diaria_activo ?? false) }, 'Circuit breaker actualizado')} color={state?.config?.circuito_perdida_diaria_activo ? '#237a4b' : '#303b48'} /></View>
+    <View style={styles.rowButtons}>
+      <Field label="PÉRDIDA DIARIA MÁXIMA (% del balance)" value={perdidaDiariaPct} onChangeText={setPerdidaDiariaPct} numeric />
+      <Field label="SPREAD MÁXIMO (puntos, 0 = sin límite)" value={spreadMaximo} onChangeText={setSpreadMaximo} numeric />
+    </View>
+    <Field label="MÁX. OPERACIONES ABIERTAS POR SÍMBOLO (0 = ilimitadas)" value={maxOperaciones} onChangeText={setMaxOperaciones} numeric />
+    <Text style={styles.explanation}>Por defecto es 1: evita que una misma señal abra varias operaciones seguidas. La temporalidad de entrada y la macro de la estrategia activa se mantienen aunque MT5 muestre otro gráfico.</Text>
+    <Button label="Guardar límites" onPress={() => run('/api/config', { circuito_perdida_diaria_pct: Number(perdidaDiariaPct) || 0, spread_maximo_puntos: Number(spreadMaximo) || 0, max_operaciones_por_simbolo: Math.max(0, Math.floor(Number(maxOperaciones) || 0)) }, 'Límites guardados')} color="#b88b35" />
+  </Section>
+  </>}
   {tab === 'historial' && <>
   <Section title="Estadísticas (últimos 30 días)">{estadisticas ? <>
     {[['Operaciones totales', String(estadisticas.total_operaciones)], ['Ganadoras', String(estadisticas.ganadoras)], ['Perdedoras', String(estadisticas.perdedoras)], ['Winrate', `${estadisticas.winrate_pct}%`], ['Ganancia total', `${estadisticas.ganancia_total} ${account?.moneda || ''}`], ['Mejor operación', `${estadisticas.mejor_operacion} ${account?.moneda || ''}`], ['Peor operación', `${estadisticas.peor_operacion} ${account?.moneda || ''}`], ['Profit factor', estadisticas.profit_factor != null ? String(estadisticas.profit_factor) : '—'], ['Racha actual', estadisticas.racha_actual > 0 ? `${estadisticas.racha_actual} ganadoras seguidas` : estadisticas.racha_actual < 0 ? `${Math.abs(estadisticas.racha_actual)} perdedoras seguidas` : 'sin racha']].map(([label, value]) => <View style={styles.row} key={label}><Text style={styles.label}>{label}</Text><Text style={styles.value}>{value}</Text></View>)}
   </> : <Text style={styles.muted}>Cargando estadísticas...</Text>}</Section>
-  <Section title="Bitácora de operaciones (automática)">
+  <Section wide title="Bitácora de operaciones (automática)">
     <Text style={styles.explanation}>Cada operación (del bot o manual) se registra sola: queda EN CURSO mientras está abierta y, al cerrar, se completa con el resultado final (TP, SL, BE o manual).</Text>
     {diarioStats && diarioStats.total.operaciones > 0 ? <View style={[styles.saved, { marginBottom: 10 }]}>
       <Text style={styles.savedTitle}>{diarioStats.total.operaciones} cerradas · winrate {diarioStats.total.winrate_pct}% · {diarioStats.total.profit} {account?.moneda || ''}</Text>
@@ -2129,14 +2868,7 @@ export default function App() {
   <Section title="Historial reciente">{history.slice(0, 20).map((item) => <View style={styles.position} key={item.ticket}><Text style={styles.value}>{item.tipo.toUpperCase()} · {item.simbolo} · {item.volumen} lotes</Text><Text style={styles.muted}>{formatearHora12(item.hora)} · {item.profit}</Text></View>)}</Section>
   </>}
   {tab === 'fundamentales' && <>
-  <Section title="Protección en noticias">
-    <Text style={styles.explanation}>Durante una noticia de alto impacto (saliendo ahora o dentro de los minutos configurados) el bot no abre operaciones nuevas y mueve a BE las abiertas que van en ganancia. Las que van en pérdida no se tocan.</Text>
-    <View style={styles.rowButtons}>
-      <Button label={state?.config?.bloqueo_noticias_activo !== false ? 'No abrir en noticias: ACTIVADO' : 'No abrir en noticias: desactivado'} onPress={() => run('/api/config', { bloqueo_noticias_activo: state?.config?.bloqueo_noticias_activo === false }, 'Bloqueo por noticias actualizado')} color={state?.config?.bloqueo_noticias_activo !== false ? '#237a4b' : '#303b48'} />
-      <Button label={state?.config?.noticia_be_activo !== false ? 'BE en noticias: ACTIVADO' : 'BE en noticias: desactivado'} onPress={() => run('/api/config', { noticia_be_activo: state?.config?.noticia_be_activo === false }, 'BE en noticias actualizado')} color={state?.config?.noticia_be_activo !== false ? '#237a4b' : '#303b48'} />
-    </View>
-  </Section>
-  <Section title="Fundamentales">
+  <Section wide title="Calendario económico">
     <Text style={styles.explanation}>Calendario de la semana: NFP, IPC, tasas y demás noticias de alto impacto.</Text>
     <Text style={[styles.subTitle, { marginTop: 4 }]}>EN PROCESO</Text>
     {fundamentales.en_proceso.length ? fundamentales.en_proceso.map((ev, i) => (
@@ -2204,9 +2936,130 @@ export default function App() {
     <Text style={styles.foot}>Ahora sí puedes elegir avisos por SL/TP: el bot detecta cierres automáticos de MT5 y puede avisarte solo cuando la posición cierra por stop loss o take profit.</Text>
   </Section>
   </>}
-  <Text style={styles.footer}>API: {API_URL}</Text></ScrollView></View>;
+           <Text style={styles.footer}>SpotPlus · Centro de control</Text>
+         </ScrollView>
+       </View>
+     </View>
+   </View>
+  );
 }
 
-const styles = StyleSheet.create({ screen: { flex: 1, backgroundColor: '#0d1117' }, content: { padding: 22, paddingTop: 58, maxWidth: 760, width: '100%', alignSelf: 'center' }, center: { flex: 1, backgroundColor: '#0d1117', alignItems: 'center', justifyContent: 'center', gap: 14 }, header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 26 }, kicker: { color: '#e4b75a', fontSize: 11, letterSpacing: 2, fontWeight: '700' }, title: { color: '#f4f1e8', fontSize: 36, fontWeight: '800' }, connection: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: 20 }, online: { backgroundColor: '#183b2a' }, offline: { backgroundColor: '#3c2023' }, dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#57d391', marginRight: 7 }, connectionText: { color: '#d7e3db', fontSize: 12, fontWeight: '700' }, section: { backgroundColor: '#151b23', borderWidth: 1, borderColor: '#26303b', borderRadius: 8, padding: 18, marginBottom: 14 }, sectionTitle: { color: '#f4f1e8', fontSize: 14, fontWeight: '800', letterSpacing: 1, marginBottom: 16 }, market: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 }, right: { alignItems: 'flex-end' }, symbol: { color: '#f4f1e8', fontSize: 28, fontWeight: '800', marginTop: 5 }, signal: { color: '#e4b75a', fontSize: 15, fontWeight: '800', marginTop: 6 }, metrics: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#26303b', paddingTop: 16 }, muted: { color: '#8893a0', fontSize: 11, letterSpacing: 0.5 }, metric: { color: '#dce2e8', fontSize: 15, fontWeight: '700' }, green: { color: '#57d391' }, red: { color: '#ff7d7d' }, row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#26303b' }, label: { color: '#8893a0', fontSize: 11, letterSpacing: 0.6, marginBottom: 6 }, value: { color: '#e1e7ed', fontSize: 14, fontWeight: '700' }, foot: { color: '#687481', fontSize: 11, marginTop: 13 }, field: { flex: 1, marginBottom: 10, minWidth: 120 }, input: { backgroundColor: '#0e141b', borderWidth: 1, borderColor: '#33404d', borderRadius: 6, color: '#f4f1e8', padding: 11, minHeight: 42 }, codeInput: { minHeight: 110, textAlignVertical: 'top', fontFamily: Platform.OS === 'web' ? 'monospace' : undefined }, rowButtons: { flexDirection: 'row', gap: 9, flexWrap: 'wrap' }, button: { flex: 1, borderRadius: 6, padding: 13, alignItems: 'center', marginBottom: 9, minWidth: 120 }, buttonText: { color: '#fff', fontSize: 13, fontWeight: '800' }, subTitle: { color: '#f4f1e8', fontSize: 13, fontWeight: '800', marginTop: 12, marginBottom: 8 }, explanation: { color: '#8893a0', fontSize: 12, lineHeight: 18, marginBottom: 10 }, condition: { backgroundColor: '#0e141b', borderWidth: 1, borderColor: '#33404d', borderRadius: 7, padding: 12, marginBottom: 10 }, conditionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 }, conditionTitle: { color: '#e1e7ed', fontSize: 13, fontWeight: '700', flex: 1 }, remove: { color: '#ff7d7d', fontSize: 12 }, saved: { borderTopWidth: 1, borderTopColor: '#33404d', paddingTop: 12, marginTop: 12 }, savedTitle: { color: '#f4f1e8', fontSize: 15, fontWeight: '800', marginBottom: 5 }, codeSummary: { color: '#687481', fontSize: 11, marginBottom: 9 }, position: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#26303b' }, positionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 }, badge: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 4, fontSize: 10, fontWeight: '800' }, buyBadge: { backgroundColor: '#194b31', color: '#70e0a3' }, sellBadge: { backgroundColor: '#57292c', color: '#ff9999' }, positionName: { color: '#dce2e8', fontSize: 13, flex: 1, marginLeft: 8 }, close: { color: '#e4b75a', fontSize: 12, fontWeight: '800' }, message: { color: '#e4b75a', backgroundColor: '#322915', padding: 11, borderRadius: 6, marginBottom: 14 }, error: { color: '#ff9999', backgroundColor: '#3a2024', padding: 11, borderRadius: 6, marginBottom: 14 }, orderHint: { color: '#687481', fontSize: 11, marginTop: 2 }, footer: { color: '#596572', fontSize: 10, textAlign: 'center', marginVertical: 18 }, tabBar: { flexDirection: 'row', gap: 6, marginBottom: 16 }, tabButton: { flex: 1, paddingVertical: 10, borderRadius: 6, alignItems: 'center', backgroundColor: '#151b23', borderWidth: 1, borderColor: '#26303b' }, tabButtonActive: { backgroundColor: '#b88b35', borderColor: '#b88b35' }, tabButtonText: { color: '#8893a0', fontSize: 12, fontWeight: '700' }, tabButtonTextActive: { color: '#0d1117' }, progressTrack: { height: 8, backgroundColor: '#0e141b', borderRadius: 4, overflow: 'hidden', marginBottom: 12, borderWidth: 1, borderColor: '#33404d' }, progressFill: { height: '100%', backgroundColor: '#e4b75a', borderRadius: 4 }, replayBar: { padding: 16, paddingBottom: 30, backgroundColor: '#151b23', borderTopWidth: 1, borderTopColor: '#26303b' },
+const baseStyles = StyleSheet.create({ screen: { flex: 1, backgroundColor: '#0d1117' }, content: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 28, maxWidth: 1120, width: '100%', alignSelf: 'center', gap: 14 }, contentGrid: { paddingHorizontal: 28, paddingTop: 24, paddingBottom: 32, maxWidth: 1920, width: '100%', alignSelf: 'center', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', alignContent: 'flex-start', gap: 16 }, contentGridCompact: { paddingHorizontal: 14, paddingTop: 16, paddingBottom: 24, gap: 12 }, center: { flex: 1, backgroundColor: '#0d1117', alignItems: 'center', justifyContent: 'center', gap: 14 }, header: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 14 }, resumen: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10, flexGrow: 1, flexShrink: 1, flexBasis: 320, alignContent: 'flex-end' }, resumenChip: { backgroundColor: '#151b23', borderWidth: 1, borderColor: '#26303b', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14, minWidth: 150 }, resumenValor: { color: '#f4f1e8', fontSize: 15, fontWeight: '800', marginTop: 3 }, kicker: { color: '#e4b75a', fontSize: 11, letterSpacing: 2, fontWeight: '700' }, title: { color: '#f4f1e8', fontSize: 40, fontWeight: '800', letterSpacing: -1 }, connection: { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: 20 }, online: { backgroundColor: '#183b2a' }, offline: { backgroundColor: '#3c2023' }, dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#57d391', marginRight: 7 }, connectionText: { color: '#d7e3db', fontSize: 12, fontWeight: '700' }, section: { backgroundColor: '#151b23', borderWidth: 1, borderColor: '#26303b', borderRadius: 12, padding: 20, flexGrow: 1, flexShrink: 1, flexBasis: 480, minWidth: 0 }, sectionWide: { flexBasis: '100%' }, sectionTitle: { color: '#f4f1e8', fontSize: 14, fontWeight: '800', letterSpacing: 0.4, marginBottom: 18 }, market: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 }, right: { alignItems: 'flex-end' }, symbol: { color: '#f4f1e8', fontSize: 28, fontWeight: '800', marginTop: 5 }, signal: { color: '#e4b75a', fontSize: 15, fontWeight: '800', marginTop: 6 }, metrics: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#26303b', paddingTop: 16 }, muted: { color: '#8893a0', fontSize: 11, letterSpacing: 0.5 }, metric: { color: '#dce2e8', fontSize: 15, fontWeight: '700' }, green: { color: '#57d391' }, red: { color: '#ff7d7d' }, row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#26303b' }, label: { color: '#8893a0', fontSize: 11, letterSpacing: 0.6, marginBottom: 6 }, value: { color: '#e1e7ed', fontSize: 14, fontWeight: '700' }, foot: { color: '#687481', fontSize: 11, marginTop: 13 }, field: { flex: 1, marginBottom: 10, minWidth: 120 }, input: { backgroundColor: '#0e141b', borderWidth: 1, borderColor: '#33404d', borderRadius: 6, color: '#f4f1e8', padding: 11, minHeight: 42 }, codeInput: { minHeight: 110, textAlignVertical: 'top', fontFamily: Platform.OS === 'web' ? 'monospace' : undefined }, rowButtons: { flexDirection: 'row', gap: 9, flexWrap: 'wrap' }, button: { flex: 1, borderRadius: 8, padding: 14, alignItems: 'center', marginBottom: 9, minWidth: 120 }, buttonText: { color: '#fff', fontSize: 13, fontWeight: '800' }, subTitle: { color: '#f4f1e8', fontSize: 13, fontWeight: '800', marginTop: 12, marginBottom: 8 }, explanation: { color: '#8893a0', fontSize: 12, lineHeight: 18, marginBottom: 10 }, condition: { backgroundColor: '#0e141b', borderWidth: 1, borderColor: '#33404d', borderRadius: 7, padding: 12, marginBottom: 10 }, conditionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 }, conditionTitle: { color: '#e1e7ed', fontSize: 13, fontWeight: '700', flex: 1 }, remove: { color: '#ff7d7d', fontSize: 12 }, saved: { borderTopWidth: 1, borderTopColor: '#33404d', paddingTop: 12, marginTop: 12 }, savedTitle: { color: '#f4f1e8', fontSize: 15, fontWeight: '800', marginBottom: 5 }, codeSummary: { color: '#687481', fontSize: 11, marginBottom: 9 }, position: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#26303b' }, positionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 }, badge: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 4, fontSize: 10, fontWeight: '800', color: '#e1e7ed' }, buyBadge: { backgroundColor: '#194b31', color: '#70e0a3' }, sellBadge: { backgroundColor: '#57292c', color: '#ff9999' }, positionName: { color: '#dce2e8', fontSize: 13, flex: 1, marginLeft: 8 }, close: { color: '#e4b75a', fontSize: 12, fontWeight: '800' }, message: { width: '100%', color: '#e4b75a', backgroundColor: '#322915', padding: 11, borderRadius: 6, marginBottom: 14 }, error: { width: '100%', color: '#ff9999', backgroundColor: '#3a2024', padding: 11, borderRadius: 6, marginBottom: 14 }, orderHint: { color: '#687481', fontSize: 11, marginTop: 2 }, footer: { width: '100%', color: '#596572', fontSize: 10, textAlign: 'center', marginVertical: 18 }, tabBar: { flexDirection: 'row', gap: 6, flexGrow: 1 }, tabButton: { flex: 1, minWidth: 108, paddingHorizontal: 12, paddingVertical: 12, borderRadius: 8, alignItems: 'center', backgroundColor: '#151b23', borderWidth: 1, borderColor: '#26303b' }, tabButtonActive: { backgroundColor: '#b88b35', borderColor: '#b88b35' }, tabButtonText: { color: '#8893a0', fontSize: 12, fontWeight: '700' }, tabButtonTextActive: { color: '#0d1117' }, progressTrack: { height: 8, backgroundColor: '#0e141b', borderRadius: 4, overflow: 'hidden', marginBottom: 12, borderWidth: 1, borderColor: '#33404d' }, progressFill: { height: '100%', backgroundColor: '#e4b75a', borderRadius: 4 }, replayBar: { padding: 16, paddingBottom: 30, backgroundColor: '#151b23', borderTopWidth: 1, borderTopColor: '#26303b' },
   dateValue: { color: '#e1e7ed', fontSize: 14 }, dateModalBackdrop: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.65)', justifyContent: 'center', alignItems: 'center', padding: 20 }, dateModal: { backgroundColor: '#151b23', borderRadius: 8, padding: 18, alignItems: 'center' }, timeframeButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, timeframeOption: { flexGrow: 1, flexBasis: '22%', minHeight: 40, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 7, borderWidth: 1, borderColor: '#33404d', borderRadius: 6, backgroundColor: '#0e141b' }, timeframeOptionActive: { backgroundColor: '#b88b35', borderColor: '#b88b35' }, timeframeOptionText: { color: '#8893a0', fontSize: 12, fontWeight: '800' }, timeframeOptionTextActive: { color: '#0d1117' }, replayHeader: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, backgroundColor: '#151b23', borderBottomWidth: 1, borderBottomColor: '#26303b' }, replayTitle: { color: '#f4f1e8', fontSize: 15, fontWeight: '800' }, replayHint: { color: '#8893a0', fontSize: 11, marginTop: 5 },
 });
+const styles = {
+  ...baseStyles,
+  ...StyleSheet.create({
+    screen: { flex: 1, backgroundColor: '#0a1118' },
+    contentGrid: { paddingHorizontal: 30, paddingTop: 28, paddingBottom: 42, maxWidth: 1680, width: '100%', alignSelf: 'center', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', alignContent: 'flex-start', gap: 18 },
+    contentGridCompact: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 32, gap: 13 },
+    contentGridDesktop: { paddingHorizontal: 36, paddingTop: 34 },
+    center: { flex: 1, backgroundColor: '#0a1118', alignItems: 'center', justifyContent: 'center', gap: 14 },
+    appShell: { flex: 1, flexDirection: 'row' },
+    appShellDesktop: { backgroundColor: '#0a1118' },
+    sidebar: { width: 244, flexShrink: 0, paddingHorizontal: 16, paddingTop: 26, paddingBottom: 20, backgroundColor: '#0e1720', borderRightWidth: 1, borderRightColor: '#1d2b37' },
+    brand: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 8, marginBottom: 34 },
+    brandMark: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: '#d7ae5b' },
+    brandMarkText: { color: '#101820', fontSize: 22, fontWeight: '900' },
+    brandName: { color: '#f0f4f7', fontSize: 17, fontWeight: '800', letterSpacing: 0.1 },
+    brandCaption: { color: '#8192a1', fontSize: 9, fontWeight: '800', letterSpacing: 1.6, marginTop: 3 },
+    navCaption: { color: '#687a89', fontSize: 9, fontWeight: '800', letterSpacing: 1.3, marginHorizontal: 10, marginBottom: 10 },
+    navList: { gap: 5 },
+    navButton: { flexDirection: 'row', alignItems: 'center', gap: 11, minHeight: 44, paddingHorizontal: 9, borderRadius: 11, borderWidth: 1, borderColor: 'transparent' },
+    navButtonActive: { backgroundColor: '#192631', borderColor: '#2c3b47' },
+    navIcon: { width: 29, height: 29, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17232d' },
+    navIconActive: { backgroundColor: '#d7ae5b' },
+    navIconText: { color: '#8fa0ad', fontSize: 9, fontWeight: '900', letterSpacing: 0.2 },
+    navIconTextActive: { color: '#101820' },
+    navLabel: { color: '#9aa9b5', fontSize: 12, fontWeight: '600' },
+    navLabelActive: { color: '#f0f4f7', fontWeight: '800' },
+    sidebarFooter: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 'auto', padding: 13, borderRadius: 13, backgroundColor: '#141f29', borderWidth: 1, borderColor: '#23313d' },
+    statusIndicator: { width: 9, height: 9, borderRadius: 5 },
+    statusIndicatorOnline: { backgroundColor: '#49c58b' },
+    statusIndicatorOffline: { backgroundColor: '#ed7078' },
+    sidebarStatusText: { color: '#e5ebf0', fontSize: 11, fontWeight: '800' },
+    sidebarStatusSub: { color: '#8c9ca9', fontSize: 10, marginTop: 3 },
+    main: { flex: 1, minWidth: 0 },
+    header: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 18, marginBottom: 4 },
+    headerCompact: { alignItems: 'flex-start', gap: 14 },
+    titleGroup: { flexGrow: 1, flexShrink: 1, flexBasis: 190 },
+    kicker: { color: '#c69a49', fontSize: 9, letterSpacing: 1.6, fontWeight: '800' },
+    title: { color: '#f0f4f7', fontSize: 32, fontWeight: '800', letterSpacing: -0.8, marginTop: 6 },
+    titleCompact: { fontSize: 27 },
+    resumen: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 9, flexGrow: 1, flexShrink: 1, flexBasis: 480, maxWidth: 760 },
+    resumenCompact: { flexBasis: '100%', maxWidth: undefined, justifyContent: 'flex-start' },
+    resumenChip: { backgroundColor: '#111c26', borderWidth: 1, borderColor: '#23323e', borderRadius: 13, paddingVertical: 11, paddingHorizontal: 13, minWidth: 132, flexGrow: 1 },
+    resumenValor: { color: '#e9eef2', fontSize: 14, fontWeight: '800', marginTop: 5 },
+    muted: { color: '#93a2af', fontSize: 11, letterSpacing: 0.2 },
+    metric: { color: '#e5edf2', fontSize: 15, fontWeight: '700' },
+    label: { color: '#8d9eab', fontSize: 10, letterSpacing: 0.8, marginBottom: 6 },
+    value: { color: '#e4ebf0', fontSize: 14, fontWeight: '700' },
+    foot: { color: '#7d8e9b', fontSize: 11, lineHeight: 17, marginTop: 12 },
+    connection: { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, borderColor: '#273741' },
+    online: { backgroundColor: '#14291f', borderColor: '#24523b' },
+    offline: { backgroundColor: '#2d1d23', borderColor: '#60343a' },
+    dot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+    dotOnline: { backgroundColor: '#49c58b' },
+    dotOffline: { backgroundColor: '#ed7078' },
+    connectionText: { color: '#d6e0e5', fontSize: 11, fontWeight: '800' },
+    section: { backgroundColor: '#111b25', borderWidth: 1, borderColor: '#22313d', borderRadius: 15, padding: 20, flexGrow: 1, flexShrink: 1, flexBasis: 450, minWidth: 0 },
+    sectionWide: { flexBasis: '100%' },
+    sectionTitle: { color: '#e9eef2', fontSize: 14, fontWeight: '800', letterSpacing: 0.1, marginBottom: 15 },
+    symbol: { color: '#f0f4f7', fontSize: 25, fontWeight: '800', marginTop: 5 },
+    signal: { color: '#d7ae5b', fontSize: 14, fontWeight: '800', marginTop: 6 },
+    metrics: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#263541', paddingTop: 16 },
+    green: { color: '#53ce91' },
+    red: { color: '#f17b83' },
+    row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#24323e' },
+    input: { backgroundColor: '#0c151d', borderWidth: 1, borderColor: '#2b3b48', borderRadius: 9, color: '#edf2f5', padding: 11, minHeight: 44 },
+    button: { flex: 1, borderRadius: 10, padding: 13, alignItems: 'center', marginBottom: 9, minWidth: 120 },
+    buttonText: { color: '#f8fafb', fontSize: 12, fontWeight: '800' },
+    subTitle: { color: '#e7edf1', fontSize: 13, fontWeight: '800', marginTop: 12, marginBottom: 8 },
+    explanation: { color: '#94a4b0', fontSize: 12, lineHeight: 19, marginBottom: 10 },
+    condition: { backgroundColor: '#0d1720', borderWidth: 1, borderColor: '#2a3945', borderRadius: 10, padding: 12, marginBottom: 10 },
+    conditionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    conditionTitle: { color: '#e4ebf0', fontSize: 13, fontWeight: '700', flex: 1 },
+    saved: { borderTopWidth: 1, borderTopColor: '#2a3945', paddingTop: 14, marginTop: 14 },
+    savedTitle: { color: '#edf2f5', fontSize: 15, fontWeight: '800', marginBottom: 5 },
+    codeSummary: { color: '#8797a4', fontSize: 11, marginBottom: 9 },
+    position: { paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#24323e' },
+    positionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 },
+    badge: { paddingHorizontal: 8, paddingVertical: 5, borderRadius: 6, fontSize: 10, fontWeight: '800', color: '#e4ebf0' },
+    buyBadge: { backgroundColor: '#163b2b', color: '#69d8a1' },
+    sellBadge: { backgroundColor: '#48242a', color: '#f18b91' },
+    positionName: { color: '#dbe4e9', fontSize: 13, flex: 1, marginLeft: 2 },
+    positionProfit: { fontSize: 12, fontWeight: '800' },
+    close: { color: '#e0b15b', fontSize: 12, fontWeight: '800' },
+    message: { width: '100%', color: '#e1be73', backgroundColor: '#292419', padding: 12, borderRadius: 10, marginBottom: 14 },
+    error: { width: '100%', color: '#f29aa0', backgroundColor: '#2d1d23', padding: 12, borderRadius: 10, marginBottom: 14 },
+    orderHint: { color: '#82929e', fontSize: 11, marginTop: 3 },
+    footer: { width: '100%', color: '#637583', fontSize: 10, textAlign: 'center', marginVertical: 20 },
+    tabScroll: { width: '100%', flexGrow: 0, marginBottom: 2 },
+    tabBar: { flexDirection: 'row', gap: 7, flexGrow: 1 },
+    tabButton: { flex: 1, minWidth: 102, paddingHorizontal: 13, paddingVertical: 11, borderRadius: 10, alignItems: 'center', backgroundColor: '#111b25', borderWidth: 1, borderColor: '#243440' },
+    tabButtonActive: { backgroundColor: '#d7ae5b', borderColor: '#d7ae5b' },
+    tabButtonText: { color: '#9aa9b4', fontSize: 11, fontWeight: '700' },
+    tabButtonTextActive: { color: '#111a22', fontWeight: '800' },
+    progressTrack: { height: 8, backgroundColor: '#0c151d', borderRadius: 5, overflow: 'hidden', marginBottom: 12, borderWidth: 1, borderColor: '#2a3945' },
+    progressFill: { height: '100%', backgroundColor: '#d7ae5b', borderRadius: 5 },
+    replayBar: { padding: 16, paddingBottom: 30, backgroundColor: '#111b25', borderTopWidth: 1, borderTopColor: '#263541' },
+    dateValue: { color: '#e2eaf0', fontSize: 14 },
+    dateModalBackdrop: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.72)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+    dateModal: { backgroundColor: '#111b25', borderWidth: 1, borderColor: '#2a3945', borderRadius: 14, padding: 18, alignItems: 'center' },
+    timeframeButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+    timeframeOption: { flexGrow: 1, flexBasis: '22%', minHeight: 40, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 8, borderWidth: 1, borderColor: '#2b3b48', borderRadius: 9, backgroundColor: '#0d1720' },
+    timeframeOptionActive: { backgroundColor: '#d7ae5b', borderColor: '#d7ae5b' },
+    timeframeOptionText: { color: '#a0afb9', fontSize: 12, fontWeight: '800' },
+    timeframeOptionTextActive: { color: '#111a22' },
+    replayHeader: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, backgroundColor: '#111b25', borderBottomWidth: 1, borderBottomColor: '#263541' },
+    replayTitle: { color: '#edf2f5', fontSize: 15, fontWeight: '800' },
+    replayHint: { color: '#9aa9b4', fontSize: 11, marginTop: 5 },
+    assetList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 5 },
+    assetChip: { paddingVertical: 8, paddingHorizontal: 11, borderRadius: 8, backgroundColor: '#182631', borderWidth: 1, borderColor: '#2b3d49' },
+    assetChipText: { color: '#dce6eb', fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
+    operationalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#24323e' },
+    operationalValue: { color: '#e7edf1', fontSize: 12, fontWeight: '800' },
+    emptyState: { paddingVertical: 18, paddingHorizontal: 14, borderRadius: 11, backgroundColor: '#0d1720', borderWidth: 1, borderColor: '#21303b' },
+    emptyTitle: { color: '#dce5ea', fontSize: 13, fontWeight: '800', marginBottom: 5 },
+  }),
+};

@@ -1,0 +1,4 @@
+{"ts": "2026-11-15T17:21:31", "evento": "bloqueo", "codigo": "sin_sl", "mensaje": "La orden no trae Stop Loss y la guardia lo exige.", "simbolo": "XAUUSD"}
+{"ts": "2026-11-15T23:30:07", "evento": "bloqueo", "codigo": "max_abiertas", "mensaje": "Ya hay 38 operaciones/pendientes abiertas (maximo 6).", "simbolo": "XAGUSD"}
+{"ts": "2026-11-16T07:30:07", "evento": "bloqueo", "codigo": "max_por_dia", "mensaje": "Ya se abrieron 37 entradas hoy (maximo 20).", "simbolo": "USTEC"}
+{"ts": "2026-11-16T10:15:06", "evento": "bloqueo", "codigo": "max_por_dia", "mensaje": "Ya se abrieron 37 entradas hoy (maximo 20).", "simbolo": "USTEC"}

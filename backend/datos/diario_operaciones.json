@@ -1,0 +1,26 @@
+[
+  {
+    "id": 1793169120913,
+    "ticket": 721387744,
+    "estado": "cerrada",
+    "simbolo": "XAUUSD",
+    "tipo": "compra",
+    "volumen": 0.01,
+    "entrada": 4031.5420000000004,
+    "sl": null,
+    "tp": null,
+    "origen": "manual",
+    "balance_apertura": 8664038446.43,
+    "riesgo": "",
+    "perdida_estimada": null,
+    "ganancia_estimada": null,
+    "ratio_rr": null,
+    "hora_apertura": 1793169120.9131558,
+    "hora_cierre": 1793169399,
+    "resultado": "Manual",
+    "profit": -1.33,
+    "precio_cierre": 4030.213,
+    "duracion_seg": 278,
+    "notas": ""
+  }
+]

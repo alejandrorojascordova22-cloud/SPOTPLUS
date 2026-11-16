@@ -1,16 +1,16 @@
 # Crea un ZIP con el codigo fuente del bot y la app Expo, sin secretos ni dependencias generadas.
 # Uso desde la raiz del proyecto:
 #   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-#   .\backup-codigo.ps1
+#   .\scripts\backup-codigo.ps1
 
 $ErrorActionPreference = "Stop"
-$origen = Split-Path -Parent $MyInvocation.MyCommand.Path
+$origen = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $fecha = Get-Date -Format "yyyy-MM-dd_HHmm"
 $zipSalida = Join-Path $origen "codigo_$fecha.zip"
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) "spotplus-codigo_$fecha"
 
 # Se copia la estructura completa para no omitir archivos de mobile/ ni assets.
-$carpetasExcluir = @("venv", ".venv", ".git", "__pycache__", ".pytest_cache", "node_modules", ".expo", "dist", "web-build", "build", ".gradle", ".cxx")
+$carpetasExcluir = @("venv", ".venv", ".git", "_respaldo", "datos_historicos", "__pycache__", ".pytest_cache", "node_modules", ".expo", "dist", "web-build", "build", ".gradle", ".cxx")
 
 try {
     New-Item -ItemType Directory -Path $temp -Force | Out-Null
@@ -28,13 +28,16 @@ try {
             $partes = $rutaRelativa -split '[\\/]'
 
             if ($elemento.PSIsContainer) {
-                if ($elemento.Name -notin $carpetasExcluir) {
+                if ($elemento.Name -notin $carpetasExcluir -and $elemento.Name -notlike ".venv*") {
                     $pendientes.Push($elemento.FullName)
                 }
                 continue
             }
 
             if ($elemento.Name -notlike ".env*" -and
+                $elemento.Name -notlike "telegram_config*.json" -and
+                $elemento.Name -notlike "cuentas*.json" -and
+                $elemento.Name -notlike "*.bak" -and
                 $elemento.Name -notlike "*.zip" -and
                 $elemento.Name -notlike "*.pyc" -and
                 $elemento.Name -notlike "*.tsbuildinfo" -and

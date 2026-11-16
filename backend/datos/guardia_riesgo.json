@@ -1,0 +1,30 @@
+{
+  "config": {
+    "activo": true,
+    "perdida_diaria_max_pct": 3.0,
+    "perdida_diaria_max_monto": 0.0,
+    "max_operaciones_abiertas": 6,
+    "max_operaciones_por_dia": 20,
+    "bloquear_duplicados": true,
+    "ventana_duplicado_seg": 30,
+    "exigir_sl": true,
+    "lote_maximo": 0.0,
+    "aplicar_a_manuales": false,
+    "avisar_telegram": true
+  },
+  "estado": {
+    "kill_switch": false,
+    "motivo": "",
+    "desde": null,
+    "bloqueo_diario": {
+      "dia": null,
+      "motivo": "",
+      "ts": null
+    },
+    "ultimo_aviso": {
+      "sin_sl": 1794784891.3841355,
+      "max_abiertas": 1794807007.722171,
+      "max_por_dia": 1794845706.5912564
+    }
+  }
+}

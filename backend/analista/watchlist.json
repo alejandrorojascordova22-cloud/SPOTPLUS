@@ -1,0 +1,32 @@
+{
+  "intervalo_min": 5,
+  "velas_por_tf": 300,
+  "cooldown_horas": 6,
+  "sufijo": "",
+  "simbolos": [
+    "XAUUSD",
+    "XAGUSD",
+    "USTEC",
+    "US30",
+    "US500"
+  ],
+  "operar": [
+    "XAUUSD",
+    "USTEC",
+    "US30",
+    "US500",
+    "XAGUSD"
+  ],
+  "gatillo": {
+    "activo": true,
+    "revisar_seg": 2,
+    "reescaneo_seg": 60,
+    "min_seg_entre_escaneos": 5,
+    "al_cerrar_vela_micro": true,
+    "retraso_cierre_seg": 2,
+    "al_entrar_zona": true,
+    "salto_pct": 0.12,
+    "ventana_salto_seg": 10,
+    "min_seg_entre_saltos": 30
+  }
+}

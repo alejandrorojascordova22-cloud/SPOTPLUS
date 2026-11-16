@@ -32,13 +32,13 @@ TERMINAL_PATH = os.getenv("MT5_TERMINAL_PATH", "").strip() or r"C:\Program Files
 PUERTO = int(os.getenv("PUERTO", "8000"))
 
 if CUENTA_ID:
-    from .multicuenta import obtener_cuenta
+    from .integraciones.multicuenta import obtener_cuenta
 
     _cuenta = obtener_cuenta(CUENTA_ID)
     if _cuenta is None:
         raise RuntimeError(
-            f"CUENTA_ID='{CUENTA_ID}' no existe en cuentas.json. "
-            "Revisa backend/cuentas.json o registra la cuenta con "
+            f"CUENTA_ID='{CUENTA_ID}' no existe en datos/cuentas.json. "
+            "Revisa backend/datos/cuentas.json o registra la cuenta con "
             "'python -m backend.multicuenta agregar'."
         )
     MT5_LOGIN = int(_cuenta["login"])

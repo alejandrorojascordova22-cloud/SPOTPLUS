@@ -1,0 +1,145 @@
+{
+ "US30|bajista|FIBO 27-50|H1|52371-52454": {
+  "estado": "confirmada",
+  "ts": "2026-10-27T23:40:06"
+ },
+ "GBPUSD|bajista|OBC|H1|1-1": {
+  "estado": "confirmada",
+  "ts": "2026-10-27T22:22:08"
+ },
+ "EURUSD|bajista|FLIP|M15|1-1": {
+  "estado": "dentro",
+  "ts": "2026-10-27T22:40:23"
+ },
+ "USDCAD|alcista|FLIP|H2|1-1": {
+  "estado": "dentro",
+  "ts": "2026-10-27T22:44:39"
+ },
+ "EURUSD|bajista|OBC|H1|1-1": {
+  "estado": "dentro",
+  "ts": "2026-10-27T23:05:09"
+ },
+ "AUDUSD|alcista|FLIP|H2|1-1": {
+  "estado": "dentro",
+  "ts": "2026-10-27T23:10:09"
+ },
+ "USDJPY|bajista|OBC|M30|158-158": {
+  "estado": "dentro",
+  "ts": "2026-10-27T23:30:11"
+ },
+ "XAUUSD|alcista|OBC|M15|3950-3960": {
+  "estado": "dentro",
+  "ts": "2026-11-02T11:02:54"
+ },
+ "XAGUSD|bajista|FLIP|M15|51-51": {
+  "estado": "dentro",
+  "ts": "2026-11-02T19:29:20"
+ },
+ "XAGUSD|bajista|OBC|M15|51-51": {
+  "estado": "confirmada",
+  "ts": "2026-11-02T13:35:08"
+ },
+ "XAGUSD|bajista|FLIP|H1|50-51": {
+  "estado": "confirmada",
+  "ts": "2026-11-03T13:16:07"
+ },
+ "XAGUSD|bajista|EV2|M15|52-53": {
+  "estado": "confirmada",
+  "ts": "2026-11-11T10:50:10",
+  "ejecutada": true
+ },
+ "XAGUSD|bajista|OBC|H4|52-53": {
+  "estado": "confirmada",
+  "ts": "2026-11-12T15:09:34"
+ },
+ "XAGUSD|bajista|FIBO 27-50|H1|50-51": {
+  "estado": "dentro",
+  "ts": "2026-11-12T15:10:06"
+ },
+ "US30|alcista|FLIP|H2|52576-52636": {
+  "estado": "dentro",
+  "ts": "2026-11-12T15:10:07"
+ },
+ "XAUUSD|bajista|FIBO 27-50|M30|3880-3904": {
+  "estado": "dentro",
+  "ts": "2026-11-12T17:56:25"
+ },
+ "XAGUSD|bajista|OBC|M15|50-50": {
+  "estado": "confirmada",
+  "ts": "2026-11-12T18:20:10",
+  "ejecutada": true
+ },
+ "US500|alcista|FLIP|M15|7564-7610": {
+  "estado": "dentro",
+  "ts": "2026-11-12T19:00:06"
+ },
+ "US500|alcista|FIBO 27-50|M30|7608-7632": {
+  "estado": "confirmada",
+  "ts": "2026-11-12T19:15:11",
+  "ejecutada": true
+ },
+ "XAGUSD|bajista|FIBO 27-50|M30|49-50": {
+  "estado": "dentro",
+  "ts": "2026-11-13T09:50:09"
+ },
+ "XAGUSD|bajista|FLIP|H4|50-51": {
+  "estado": "dentro",
+  "ts": "2026-11-13T10:00:07"
+ },
+ "XAGUSD|bajista|FIBO 27-50|H1|49-50": {
+  "estado": "dentro",
+  "ts": "2026-11-13T19:22:41"
+ },
+ "XAGUSD|bajista|FIBO 27-50|H1|49-49": {
+  "estado": "dentro",
+  "ts": "2026-11-15T17:24:16"
+ },
+ "XAGUSD|bajista|FIBO 27-50|M15|48-49": {
+  "estado": "dentro",
+  "ts": "2026-11-15T19:15:07"
+ },
+ "USTEC|bajista|FIBO 27-50|H1|27873-28077": {
+  "estado": "dentro",
+  "ts": "2026-11-15T20:44:07"
+ },
+ "XAGUSD|bajista|FIBO 27-50|M30|48-48": {
+  "estado": "confirmada",
+  "ts": "2026-11-15T23:30:09"
+ },
+ "XAGUSD|bajista|FIBO 27-50|M15|48-48": {
+  "estado": "dentro",
+  "ts": "2026-11-15T23:22:06"
+ },
+ "XAGUSD|bajista|FIBO 27-50|H1|48-49": {
+  "estado": "dentro",
+  "ts": "2026-11-15T21:11:10"
+ },
+ "XAGUSD|bajista|FIBO 27-50|M15|47-48": {
+  "estado": "dentro",
+  "ts": "2026-11-16T00:15:06"
+ },
+ "XAUUSD|bajista|FIBO 27-50|H1|3851-3867": {
+  "estado": "confirmada",
+  "ts": "2026-11-16T07:26:09"
+ },
+ "USTEC|bajista|OBC|H1|27759-27798": {
+  "estado": "dentro",
+  "ts": "2026-11-16T08:58:07"
+ },
+ "USTEC|bajista|FIBO 27-50|M15|27414-27525": {
+  "estado": "dentro",
+  "ts": "2026-11-16T12:15:10"
+ },
+ "USTEC|bajista|FLIP|M30|27499-27626": {
+  "estado": "dentro",
+  "ts": "2026-11-16T12:09:08"
+ },
+ "USTEC|bajista|OBC|M30|27497-27566": {
+  "estado": "dentro",
+  "ts": "2026-11-16T13:54:07"
+ },
+ "XAGUSD|bajista|FLIP|M15|47-47": {
+  "estado": "dentro",
+  "ts": "2026-11-16T12:55:08"
+ }
+}

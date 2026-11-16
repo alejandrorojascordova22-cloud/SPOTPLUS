@@ -1,0 +1,425 @@
+{
+  "temporalidades": {
+    "modo": "auto",
+    "seleccion": [
+      "M1",
+      "M5"
+    ],
+    "roles": {
+      "micro": [
+        "M1",
+        "M3",
+        "M5"
+      ],
+      "intermedio": [
+        "M15",
+        "M30",
+        "H1"
+      ],
+      "macro": [
+        "H2",
+        "H4"
+      ],
+      "ultra_macro": [
+        "D1",
+        "W1"
+      ]
+    },
+    "alineacion": {
+      "usar": true,
+      "minimo": 0.6
+    },
+    "lentes": {
+      "usar": true,
+      "min_grupo": 2,
+      "peso_vista_distinta": 0.5,
+      "lista": [
+        {
+          "nombre": "naranja",
+          "vista": "W1",
+          "estructura": "D1"
+        },
+        {
+          "nombre": "azul",
+          "vista": "D1",
+          "estructura": "H4"
+        },
+        {
+          "nombre": "verde",
+          "vista": "H4",
+          "estructura": "H2"
+        },
+        {
+          "nombre": "verde_fino",
+          "vista": "H2",
+          "estructura": "H1"
+        },
+        {
+          "nombre": "lente 5",
+          "vista": "H1",
+          "estructura": "M30"
+        },
+        {
+          "nombre": "lente 6",
+          "vista": "M30",
+          "estructura": "M15"
+        },
+        {
+          "nombre": "lente 7",
+          "vista": "M15",
+          "estructura": "M5"
+        },
+        {
+          "nombre": "lente 8",
+          "vista": "M5",
+          "estructura": "M3"
+        },
+        {
+          "nombre": "lente 9",
+          "vista": "M3",
+          "estructura": "M1"
+        }
+      ]
+    }
+  },
+  "estructura": {
+    "pivote_k": 3,
+    "atr_periodo": 14,
+    "fuerte_atr": 1.5,
+    "medio_atr": 0.8
+  },
+  "direccion": {
+    "modo": "auto",
+    "manual": "alcista",
+    "operar_acumulacion": false
+  },
+  "zonas_espera": {
+    "usar": true,
+    "modo": "por_fuerza",
+    "tfs": "auto",
+    "tfs_manual": [
+      "H1"
+    ],
+    "tipos": {
+      "obc": true,
+      "flip": true,
+      "fibo": true,
+      "ev2": true,
+      "n886": true
+    },
+    "niveles_fibo": [
+      27,
+      38,
+      50
+    ],
+    "niveles_ev2": [
+      110,
+      127,
+      138
+    ],
+    "ev2_exigir_confirmacion": true,
+    "max_distancia_atr": 3,
+    "cerca_atr": 0.5,
+    "tol_confluencia_atr": 0.3
+  },
+  "confirmacion": {
+    "usar": true,
+    "exigir": "rompimiento",
+    "micro_tfs": "auto",
+    "micro_manual": [
+      "M5"
+    ],
+    "elegir": "mejor",
+    "ventana_velas": 80,
+    "ventana_previa": 30,
+    "pivote_k": 2,
+    "exigir_barrido_micro": false
+  },
+  "liquidez": {
+    "usar": true,
+    "tolerancia_atr": 0.3,
+    "como_confluencia": true,
+    "como_tp": true,
+    "evitar_entrada_antes_barrido": true
+  },
+  "confluencias": {
+    "usar": true,
+    "minimo": 1
+  },
+  "operaciones": {
+    "modo": "analisis",
+    "score_para_correr": 3,
+    "reparto": [
+      0.5,
+      0.5
+    ],
+    "correr_extension": 0.27,
+    "sl_modo": "micro_si_confirmada",
+    "sl_buffer_atr": 0.2,
+    "rr_minimo": 1,
+    "asegurar_en_retroceso": true
+  },
+  "avisos": {
+    "estados": [
+      "dentro",
+      "confirmada"
+    ],
+    "max_escenarios_por_activo": 1
+  },
+  "riesgo": {
+    "modo": "monto_fijo",
+    "porcentaje": 1,
+    "monto_fijo": 200,
+    "interes_compuesto": true,
+    "capital_inicial": 1000
+  },
+  "ejecucion": {
+    "activa": false,
+    "solo_cuenta_demo": true,
+    "simbolos": "XAUUSD",
+    "max_posiciones_por_simbolo": 0,
+    "spread_maximo_puntos": 0,
+    "todas_las_proyecciones": false
+  },
+  "estilo": {
+    "activo": "scalping",
+    "perfiles": {
+      "scalping": {
+        "escaner": {
+          "intervalo_min": 1,
+          "cooldown_horas": 1,
+          "gatillo": {
+            "reescaneo_seg": 15,
+            "salto_pct": 0.08
+          }
+        },
+        "confirmacion": {
+          "micro_tfs": "manual",
+          "micro_manual": [
+            "M1",
+            "M3"
+          ]
+        },
+        "zonas_espera": {
+          "max_distancia_atr": 1.5
+        },
+        "operaciones": {
+          "modo": "una",
+          "rr_minimo": 1
+        },
+        "temporalidades": {
+          "modo": "auto",
+          "roles": {
+            "micro": [
+              "M1",
+              "M3",
+              "M5"
+            ],
+            "intermedio": [
+              "M15",
+              "M30",
+              "H1"
+            ],
+            "macro": [
+              "H4"
+            ],
+            "ultra_macro": []
+          },
+          "lentes": {
+            "lista": [
+              {
+                "nombre": "verde_fino",
+                "vista": "H2",
+                "estructura": "H1"
+              },
+              {
+                "nombre": "lente 5",
+                "vista": "H1",
+                "estructura": "M30"
+              },
+              {
+                "nombre": "lente 6",
+                "vista": "M30",
+                "estructura": "M15"
+              },
+              {
+                "nombre": "lente 7",
+                "vista": "M15",
+                "estructura": "M5"
+              },
+              {
+                "nombre": "lente 8",
+                "vista": "M5",
+                "estructura": "M3"
+              },
+              {
+                "nombre": "lente 9",
+                "vista": "M3",
+                "estructura": "M1"
+              }
+            ]
+          }
+        }
+      },
+      "intraday": {
+        "escaner": {
+          "intervalo_min": 5,
+          "cooldown_horas": 6,
+          "gatillo": {
+            "reescaneo_seg": 60,
+            "salto_pct": 0.12
+          }
+        },
+        "confirmacion": {
+          "micro_tfs": "manual",
+          "micro_manual": [
+            "M5"
+          ]
+        },
+        "zonas_espera": {
+          "max_distancia_atr": 3
+        },
+        "operaciones": {
+          "modo": "analisis",
+          "rr_minimo": 1
+        },
+        "temporalidades": {
+          "modo": "auto",
+          "roles": {
+            "micro": [
+              "M3",
+              "M5"
+            ],
+            "intermedio": [
+              "M15",
+              "M30",
+              "H1"
+            ],
+            "macro": [
+              "H2",
+              "H4"
+            ],
+            "ultra_macro": [
+              "D1"
+            ]
+          },
+          "lentes": {
+            "lista": [
+              {
+                "nombre": "azul",
+                "vista": "D1",
+                "estructura": "H4"
+              },
+              {
+                "nombre": "verde",
+                "vista": "H4",
+                "estructura": "H2"
+              },
+              {
+                "nombre": "verde_fino",
+                "vista": "H2",
+                "estructura": "H1"
+              },
+              {
+                "nombre": "lente 5",
+                "vista": "H1",
+                "estructura": "M30"
+              },
+              {
+                "nombre": "lente 6",
+                "vista": "M30",
+                "estructura": "M15"
+              },
+              {
+                "nombre": "lente 7",
+                "vista": "M15",
+                "estructura": "M5"
+              }
+            ]
+          }
+        }
+      },
+      "swing": {
+        "escaner": {
+          "intervalo_min": 15,
+          "cooldown_horas": 24,
+          "gatillo": {
+            "reescaneo_seg": 300,
+            "salto_pct": 0.2
+          }
+        },
+        "confirmacion": {
+          "micro_tfs": "manual",
+          "micro_manual": [
+            "M15"
+          ]
+        },
+        "zonas_espera": {
+          "max_distancia_atr": 4
+        },
+        "confluencias": {
+          "minimo": 2
+        },
+        "operaciones": {
+          "modo": "solo_correr",
+          "rr_minimo": 2
+        },
+        "temporalidades": {
+          "modo": "auto",
+          "roles": {
+            "micro": [
+              "M5",
+              "M15"
+            ],
+            "intermedio": [
+              "M30",
+              "H1"
+            ],
+            "macro": [
+              "H2",
+              "H4"
+            ],
+            "ultra_macro": [
+              "D1",
+              "W1"
+            ]
+          },
+          "lentes": {
+            "lista": [
+              {
+                "nombre": "naranja",
+                "vista": "W1",
+                "estructura": "D1"
+              },
+              {
+                "nombre": "azul",
+                "vista": "D1",
+                "estructura": "H4"
+              },
+              {
+                "nombre": "verde",
+                "vista": "H4",
+                "estructura": "H2"
+              },
+              {
+                "nombre": "verde_fino",
+                "vista": "H2",
+                "estructura": "H1"
+              },
+              {
+                "nombre": "lente 5",
+                "vista": "H1",
+                "estructura": "M30"
+              },
+              {
+                "nombre": "lente 6",
+                "vista": "M30",
+                "estructura": "M15"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+﻿{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Backend",
+      "type": "shell",
+      "command": ".\\venv\\Scripts\\python.exe -m uvicorn backend.servidor:app --host 127.0.0.1 --port 8000",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "spotplus", "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "Escaner",
+      "type": "shell",
+      "command": ".\\venv\\Scripts\\python.exe -X utf8 -m backend.analista.escaner",
+      "options": { "env": { "PYTHONUTF8": "1" } },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "spotplus", "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "Web",
+      "type": "shell",
+      "command": "npm run web",
+      "options": { "cwd": "${workspaceFolder}/mobile" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "group": "spotplus", "panel": "dedicated", "reveal": "always" }
+    },
+    {
+      "label": "SpotPlus: iniciar todo",
+      "dependsOn": ["Backend", "Escaner", "Web"],
+      "problemMatcher": []
+    }
+  ]
+}
